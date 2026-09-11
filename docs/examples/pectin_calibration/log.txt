@@ -1,0 +1,42 @@
+$ python analysis.py
+  [INFO] ingest: DM3.csv: 108345 B
+  [INFO] DM3: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM20.csv: 108344 B
+  [INFO] DM20: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM37.csv: 108344 B
+  [INFO] DM37: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM55.csv: 108344 B
+  [INFO] DM55: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM62.8.csv: 108344 B
+  [INFO] DM62.8: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM70.5.csv: 108344 B
+  [INFO] DM70.5: 3736 pts, monotonic, finite - OK
+  [INFO] calibration: 6 pts, monotonic, finite - OK
+  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
+  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+[exit 0]
+
+$ python bundle.py analysis.py -o pectin_calibration_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote pectin_calibration_standalone.py
+[exit 0]
+
+$ python pectin_calibration_standalone.py      # the handed-over script, re-run on its own
+  [INFO] DM70.5: 3736 pts, monotonic, finite - OK
+  [INFO] calibration: 6 pts, monotonic, finite - OK
+  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
+  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
+[exit 0]

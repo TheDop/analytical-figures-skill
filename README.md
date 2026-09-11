@@ -26,6 +26,160 @@ It is not a plotting tutorial. It does two things a plotting library does not:
 <sub>Hover a tile for what it is and where the data came from; click for full size. Every tile is produced by <code>docs/build_gallery.py</code> from public data and public CIFs — nothing is drawn by hand and nothing is synthetic. Interactive version with placards: <a href="https://thedop.github.io/analytical-figures-skill/">https://thedop.github.io/analytical-figures-skill/</a></sub>
 <!-- gallery:end -->
 
+<!-- examples:start -->
+## From a prompt to a figure
+
+Three prompts, run in this repository with the skill loaded. Left: the prompt and the gates that fired on the way. Right: what came back. Every run hands over one self-contained script that regenerates its figure, and the caption is interpolated from the computed values, never typed.
+
+<table>
+<tr>
+<td width="46%" valign="top">
+<p><b>“Doxorubicin peak areas from Bansal 2021, transmittance mode, 0.6–1.4 % w/w. Fit the calibration, give me LOD and LOQ, and read off the concentration for peak areas of 3.5 and 6.0 mm².”</b></p>
+<p><sub>WHAT THE SKILL DID</sub><br>
+· fit, 95 % bands and the mandatory residual panel from the published table<br>
+· <code>LOD 0.109 % w/w, LOQ 0.330 % w/w  (residual_sd (3.3σ/m, 10σ/m))</code><br>
+· read-back of 6.0 mm²: <code>REFUSED: predicted x=1.865 is outside the calibrated range [0.6, 1.4] - extrapolation refused (extend the calibration instead)</code></p>
+<p><sub>WHAT YOU GET</sub><br>
+<a href="docs/examples/bmc_lod/bmc_lod_standalone.py">one self-contained script</a> · <a href="docs/examples/bmc_lod/figure.png">the figure</a> · <a href="docs/examples/bmc_lod/caption.txt">its caption</a></p>
+<details><summary>full log</summary>
+<pre>$ python analysis.py
+  [INFO] calibration: 5 pts, monotonic, finite - OK
+  y = 3.002 x +0.402   R2 0.9919   n=5
+  LOD 0.109 % w/w, LOQ 0.330 % w/w  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.4017 [-0.1161, 0.9195] (95% CI), t=2.47, p=0.090 -&gt; no significant constant bias (CI includes 0)
+  peak area 3.50 mm2 -&gt; 1.032 % w/w
+  peak area 6.00 mm2 -&gt; REFUSED: predicted x=1.865 is outside the calibrated range [0.6, 1.4] - extrapolation refused (extend the calibration instead)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\bmc_lod\out\bmc_dox_calibration.pdf + .png, caption.txt
+[exit 0]
+$ python bundle.py analysis.py -o bmc_lod_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote bmc_lod_standalone.py
+[exit 0]
+$ python bmc_lod_standalone.py      # the handed-over script, re-run on its own
+ 0.109 % w/w, LOQ 0.330 % w/w  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.4017 [-0.1161, 0.9195] (95% CI), t=2.47, p=0.090 -&gt; no significant constant bias (CI includes 0)
+  peak area 3.50 mm2 -&gt; 1.032 % w/w
+  peak area 6.00 mm2 -&gt; REFUSED: predicted x=1.865 is outside the calibrated range [0.6, 1.4] - extrapolation refused (extend the calibration instead)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\bmc_lod\out\bmc_dox_calibration.pdf + .png, caption.txt
+[exit 0]</pre></details>
+</td>
+<td width="54%" valign="top"><a href="docs/examples/bmc_lod/figure.png"><img src="docs/examples/bmc_lod/figure.png" width="100%" alt="bmc_lod"></a></td>
+</tr>
+<tr>
+<td width="46%" valign="top">
+<p><b>“Here is aspirin&#x27;s CIF (COD 7247819). Validate it, calculate its Cu Kα powder pattern, and give me an ORTEP view with the hydrogen bonds.”</b></p>
+<p><sub>WHAT THE SKILL DID</sub><br>
+· validated before drawing anything: <code>density (i)=1.3999 (ii)=1.3997 (iii)=1.4 -&gt; PASS (all consistent)</code><br>
+· Cu Kα pattern from a Mo-refined CIF, independently cross-checked: <code>cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate &lt;0.05)</code><br>
+· ORTEP at 50 % probability, C–H hidden, heteroatoms labelled, the hydrogen bond drawn</p>
+<p><sub>WHAT YOU GET</sub><br>
+<a href="docs/examples/cif_report/cif_report_standalone.py">one self-contained script</a> · <a href="docs/examples/cif_report/figure_1.png">the figure</a> · <a href="docs/examples/cif_report/caption.txt">its caption</a></p>
+<details><summary>full log</summary>
+<pre>$ python analysis.py
+  [INFO] density: density (i)=1.3999 (ii)=1.3997 (iii)=1.4 -&gt; PASS (all consistent)
+  [INFO] geometry: Block B: 21 unique bonds, 0 outside the covalent envelope (±0.25 A; coarse bound, not Mogul)
+  [INFO] hbonds: 1 H-bonds + 0 geometric contacts (donors=[&#x27;N&#x27;, &#x27;O&#x27;], acceptors=[&#x27;Cl&#x27;, &#x27;F&#x27;, &#x27;N&#x27;, &#x27;O&#x27;, &#x27;S&#x27;], floor=120 deg)
+  [INFO] wavelength: wavelength 0.71073 A matches Mo
+  [INFO] spacegroup: space group P 1 21/c 1: 4 symops, consistent
+VALIDATION TABLE — 7247819  (P 1 21/c 1, 4 ops)
+----------------------------------------------------------------
+Block A — crystal data
+  cell volume   calc 854.83   decl 854.8
+  density (i)   1.3999  (expanded-cell, assumption-free, CODATA)
+  density (ii)  1.3997  (checkCIF formula, 1.66042)
+  density (iii) 1.4  (declared)
+  RD            1.0002  (ok)
+     -&gt; PASS (all consistent)
+  F(000)        calc 376   decl 376.0
+  formula wt    from formula_sum 180.15742   decl 180.15
+  elements      [&#x27;C&#x27;, &#x27;H&#x27;, &#x27;O&#x27;]
+  wavelength    0.71073  (MoK\a)  [wavelength 0.71073 A matches Mo]
+  space group   space group P 1 21/c 1: 4 symops, consistent
+  special pos   none
+  echo (not recomputed)  T=296(2)  R(gt)=0.0524  GoF=1.037  reflns=1946.0  th_max=27.442  size=0.463x0.186x0.03
+Block B — geometry (bond lengths vs covalent-radii sum +/-0.25 A; coarse bound, not Mogul)
+  0 outlier(s) of 21 unique bonds
+Block C — H-bonds (D-H...A, X-H normalized; D...A class by Jeffrey; sym = operator on A)
+  D      H      A         D-H   H..A   D..A    ang  class     sym
+  O1     H1     O2      0.820  1.673  2.652  173.2  moderate  3_656
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks &gt;2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate &lt;0.05)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks &gt;2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate &lt;0.05)
+  strongest reflection: {&#x27;two_theta&#x27;: 15.607, &#x27;d&#x27;: 5.6733, &#x27;hkl&#x27;: &#x27;0 0 -2&#x27;, &#x27;I&#x27;: 100.0}
+  [INFO] hbond_env: symmetry key for the caption: (i) -x+1, -y, -z+1
+  wrote pxrd.pdf/.png, structure_ellipsoid.png, hbonds.csv, peaks.csv, caption.txt
+[exit 0]
+$ python bundle.py analysis.py -o cif_report_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote cif_report_standalone.py
+[exit 0]
+$ python cif_report_standalone.py      # the handed-over script, re-run on its own
+anels labelled)
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks &gt;2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate &lt;0.05)
+  strongest reflection: {&#x27;two_theta&#x27;: 15.607, &#x27;d&#x27;: 5.6733, &#x27;hkl&#x27;: &#x27;0 0 -2&#x27;, &#x27;I&#x27;: 100.0}
+  [INFO] hbond_env: symmetry key for the caption: (i) -x+1, -y, -z+1
+  wrote pxrd.pdf/.png, structure_ellipsoid.png, hbonds.csv, peaks.csv, caption.txt
+[exit 0]</pre></details>
+</td>
+<td width="54%" valign="top"><a href="docs/examples/cif_report/figure_1.png"><img src="docs/examples/cif_report/figure_1.png" width="50%" alt="cif_report"></a><a href="docs/examples/cif_report/figure_2.png"><img src="docs/examples/cif_report/figure_2.png" width="50%" alt="cif_report"></a></td>
+</tr>
+<tr>
+<td width="46%" valign="top">
+<p><b>“Six pectin calibration standards as CSV (DM 3–70 %). Give me a publication figure of the carbonyl region and the ester/(ester+carboxylate) band-area calibration, with the LOD.”</b></p>
+<p><sub>WHAT THE SKILL DID</sub><br>
+· every file gated on ingest: <code>DM3: 3736 pts, monotonic, finite - OK</code><br>
+· one shared baseline for the two overlapping bands, split at 1700 cm⁻¹<br>
+· and it says when a method is weak: <code>p=0.001 -&gt; constant bias: intercept significantly != 0 (CI excludes 0)</code></p>
+<p><sub>WHAT YOU GET</sub><br>
+<a href="docs/examples/pectin_calibration/pectin_calibration_standalone.py">one self-contained script</a> · <a href="docs/examples/pectin_calibration/figure.png">the figure</a> · <a href="docs/examples/pectin_calibration/caption.txt">its caption</a></p>
+<details><summary>full log</summary>
+<pre>$ python analysis.py
+  [INFO] ingest: DM3.csv: 108345 B
+  [INFO] DM3: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM20.csv: 108344 B
+  [INFO] DM20: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM37.csv: 108344 B
+  [INFO] DM37: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM55.csv: 108344 B
+  [INFO] DM55: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM62.8.csv: 108344 B
+  [INFO] DM62.8: 3736 pts, monotonic, finite - OK
+  [INFO] ingest: DM70.5.csv: 108344 B
+  [INFO] DM70.5: 3736 pts, monotonic, finite - OK
+  [INFO] calibration: 6 pts, monotonic, finite - OK
+  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
+  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -&gt; constant bias: intercept significantly != 0 (CI excludes 0)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
+[exit 0]
+$ python bundle.py analysis.py -o pectin_calibration_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote pectin_calibration_standalone.py
+[exit 0]
+$ python pectin_calibration_standalone.py      # the handed-over script, re-run on its own
+  [INFO] DM70.5: 3736 pts, monotonic, finite - OK
+  [INFO] calibration: 6 pts, monotonic, finite - OK
+  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
+  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -&gt; constant bias: intercept significantly != 0 (CI excludes 0)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
+[exit 0]</pre></details>
+</td>
+<td width="54%" valign="top"><a href="docs/examples/pectin_calibration/figure.png"><img src="docs/examples/pectin_calibration/figure.png" width="100%" alt="pectin_calibration"></a></td>
+</tr>
+</table>
+<!-- examples:end -->
+
 ## Install
 
 Clone into a Claude Code skills directory, user-level or per project:

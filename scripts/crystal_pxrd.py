@@ -198,6 +198,7 @@ def plot(struct, cfg, experimental=None, pattern=None):
     spectra._apply_axis(ax, pcfg)
     if experimental is not None:
         ax.legend(loc="best")
+    style.finalize_figure(fig)
     return fig, ax, pattern
 
 

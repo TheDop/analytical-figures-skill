@@ -144,8 +144,9 @@ def plot_calibration(x, y, cfg, model=None):
     if axr is not None:
         axr.axhline(0, color="0.6", lw=0.6)
         axr.scatter(model["x"], model["resid"], zorder=3)
-        axr.set_ylabel("Resid.")
+        axr.set_ylabel("Resid. (y units)")
         axr.set_xlabel("Concentration")
     else:
         ax.set_xlabel("Concentration")
+    style.finalize_figure(fig)
     return fig, (ax, axr)

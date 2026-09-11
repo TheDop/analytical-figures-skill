@@ -223,6 +223,17 @@ def _shadow_check(body_src, skill_srcs):
         return []
     defined = {n.name for n in body_tree.body
                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    # ...and any name the body ASSIGNS anywhere: `fit = calibration.fit(x, y, cfg)` de-binds to
+    # `fit = fit(x, y, cfg)`, which is an UnboundLocalError inside a function and a silent
+    # overwrite at module level. Hit for real by a worked example in docs/examples/.
+    for node in ast.walk(body_tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.comprehension)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            for leaf in ast.walk(t):
+                if isinstance(leaf, ast.Name):
+                    defined.add(leaf.id)
     if not defined:
         return []
     # what the body calls as `<skillmodule>.<name>` -- only those get de-bound into bare names
@@ -239,7 +250,7 @@ def bundle(body_path, out_path, description=None, critic=True):
 
     body = open(body_path).read()
     for name in _shadow_check(body, None):
-        print(f"  [FAIL] '{name}' is defined in the analysis body AND used as a skill call "
+        print(f"  [FAIL] '{name}' is defined or assigned in the analysis body AND used as a skill call "
               f"(module.{name}). After de-binding both become '{name}' and the STANDALONE will "
               f"break, though this script still runs. Rename the one in the body.")
     body = "\n".join(l for l in body.splitlines() if "sys.path" not in l)

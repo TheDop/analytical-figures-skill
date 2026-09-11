@@ -582,14 +582,24 @@ def audit_layout(fig, cfg=None):
                               f"{list(dict.fromkeys(hits))[:5]} - widen the gutter "
                               f"(finalize_figure wspace=) or shorten the label"))
 
-    # composite: every panel needs exactly one aligned a/b/c letter
-    if len(data_axes) > 1:
+    # composite: every CHART needs exactly one aligned a/b/c letter. A residual strip (an
+    # axes sharing x with a taller axes of the same figure) is part of that chart, not a
+    # panel of its own: a calibration over its residual strip carries ONE letter.
+    def _is_strip(ax):
+        try:
+            sib = [o for o in ax.get_shared_x_axes().get_siblings(ax) if o is not ax and o in data_axes]
+        except Exception:
+            return False
+        h = ax.get_position().height
+        return any(o.get_position().height > 2.0 * h for o in sib)
+    charts = [ax for ax in data_axes if not _is_strip(ax)]
+    if len(charts) > 1:
         n_lab = sum(1 for t in fig.findobj(mtext.Text) if t.get_gid() == "panel-label")
         if n_lab == 0:
-            f.append(("WARN", f"{len(data_axes)}-panel figure has no panel letters - "
+            f.append(("WARN", f"{len(charts)}-panel figure has no panel letters - "
                               f"call style.add_panel_labels(fig, cfg)"))
-        elif n_lab != len(data_axes):
-            f.append(("WARN", f"panel letters ({n_lab}) != panels ({len(data_axes)}) - "
+        elif n_lab != len(charts):
+            f.append(("WARN", f"panel letters ({n_lab}) != panels ({len(charts)}) - "
                               f"one per panel; check for a missing/duplicate label"))
 
     if not f:

@@ -1,0 +1,29 @@
+$ python analysis.py
+  [INFO] calibration: 5 pts, monotonic, finite - OK
+  y = 3.002 x +0.402   R2 0.9919   n=5
+  LOD 0.109 % w/w, LOQ 0.330 % w/w  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.4017 [-0.1161, 0.9195] (95% CI), t=2.47, p=0.090 -> no significant constant bias (CI includes 0)
+  peak area 3.50 mm2 -> 1.032 % w/w
+  peak area 6.00 mm2 -> REFUSED: predicted x=1.865 is outside the calibrated range [0.6, 1.4] - extrapolation refused (extend the calibration instead)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\bmc_lod\out\bmc_dox_calibration.pdf + .png, caption.txt
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+[exit 0]
+
+$ python bundle.py analysis.py -o bmc_lod_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote bmc_lod_standalone.py
+[exit 0]
+
+$ python bmc_lod_standalone.py      # the handed-over script, re-run on its own
+ 0.109 % w/w, LOQ 0.330 % w/w  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.4017 [-0.1161, 0.9195] (95% CI), t=2.47, p=0.090 -> no significant constant bias (CI includes 0)
+  peak area 3.50 mm2 -> 1.032 % w/w
+  peak area 6.00 mm2 -> REFUSED: predicted x=1.865 is outside the calibrated range [0.6, 1.4] - extrapolation refused (extend the calibration instead)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\bmc_lod\out\bmc_dox_calibration.pdf + .png, caption.txt
+[exit 0]

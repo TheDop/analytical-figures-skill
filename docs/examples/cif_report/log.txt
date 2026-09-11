@@ -1,0 +1,57 @@
+$ python analysis.py
+  [INFO] density: density (i)=1.3999 (ii)=1.3997 (iii)=1.4 -> PASS (all consistent)
+  [INFO] geometry: Block B: 21 unique bonds, 0 outside the covalent envelope (±0.25 A; coarse bound, not Mogul)
+  [INFO] hbonds: 1 H-bonds + 0 geometric contacts (donors=['N', 'O'], acceptors=['Cl', 'F', 'N', 'O', 'S'], floor=120 deg)
+  [INFO] wavelength: wavelength 0.71073 A matches Mo
+  [INFO] spacegroup: space group P 1 21/c 1: 4 symops, consistent
+VALIDATION TABLE — 7247819  (P 1 21/c 1, 4 ops)
+----------------------------------------------------------------
+Block A — crystal data
+  cell volume   calc 854.83   decl 854.8
+  density (i)   1.3999  (expanded-cell, assumption-free, CODATA)
+  density (ii)  1.3997  (checkCIF formula, 1.66042)
+  density (iii) 1.4  (declared)
+  RD            1.0002  (ok)
+     -> PASS (all consistent)
+  F(000)        calc 376   decl 376.0
+  formula wt    from formula_sum 180.15742   decl 180.15
+  elements      ['C', 'H', 'O']
+  wavelength    0.71073  (MoK\a)  [wavelength 0.71073 A matches Mo]
+  space group   space group P 1 21/c 1: 4 symops, consistent
+  special pos   none
+  echo (not recomputed)  T=296(2)  R(gt)=0.0524  GoF=1.037  reflns=1946.0  th_max=27.442  size=0.463x0.186x0.03
+Block B — geometry (bond lengths vs covalent-radii sum +/-0.25 A; coarse bound, not Mogul)
+  0 outlier(s) of 21 unique bonds
+Block C — H-bonds (D-H...A, X-H normalized; D...A class by Jeffrey; sym = operator on A)
+  D      H      A         D-H   H..A   D..A    ang  class     sym
+  O1     H1     O2      0.820  1.673  2.652  173.2  moderate  3_656
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks >2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate <0.05)
+  [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks >2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate <0.05)
+  strongest reflection: {'two_theta': 15.607, 'd': 5.6733, 'hkl': '0 0 -2', 'I': 100.0}
+  [INFO] hbond_env: symmetry key for the caption: (i) -x+1, -y, -z+1
+  [INFO] orientation: H-bond roll under-determined (vectors cancel/out-of-plane) -> long-axis horizontal
+  [INFO] orientation: orientation=pca (+tilt (0.0, 0.0, 0.0))
+  wrote pxrd.pdf/.png, structure_ellipsoid.png, hbonds.csv, peaks.csv, caption.txt
+'created' timestamp seems very low; regarding as unix timestamp
+'modified' timestamp seems very low; regarding as unix timestamp
+[exit 0]
+
+$ python bundle.py analysis.py -o cif_report_standalone.py
+critic pass (number provenance):
+  [INFO] critic: no hard-typed figures-of-merit - on-figure numbers trace to the code
+wrote cif_report_standalone.py
+[exit 0]
+
+$ python cif_report_standalone.py      # the handed-over script, re-run on its own
+anels labelled)
+  [INFO] pxrd: PXRD: lambda=1.54060 A (cfg); 31 peaks >2%; strongest 2theta=15.607
+  [INFO] pxrd: cross-check [pymatgen]: top peak 15.607 vs 15.619, delta 0.012 deg (gate <0.05)
+  strongest reflection: {'two_theta': 15.607, 'd': 5.6733, 'hkl': '0 0 -2', 'I': 100.0}
+  [INFO] hbond_env: symmetry key for the caption: (i) -x+1, -y, -z+1
+  [INFO] orientation: H-bond roll under-determined (vectors cancel/out-of-plane) -> long-axis horizontal
+  [INFO] orientation: orientation=pca (+tilt (0.0, 0.0, 0.0))
+  wrote pxrd.pdf/.png, structure_ellipsoid.png, hbonds.csv, peaks.csv, caption.txt
+[exit 0]
