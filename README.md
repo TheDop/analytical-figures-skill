@@ -191,8 +191,10 @@ python -m pip install -r ~/.claude/skills/analytical-figures/requirements.txt
 ```
 
 `numpy` and `matplotlib` are required; `scipy` is strongly recommended. Everything else is
-per-family and imported lazily (`scikit-learn` for chemometrics, `gemmi` + `Dans_Diffraction`
-for crystal structures, `rdkit` for the cocrystal predictor), so an FTIR job never pulls them.
+per-family and imported lazily, so an FTIR job never pulls it: `requirements.txt` adds
+`scikit-learn` (chemometrics) and `rdkit` (the cocrystal predictor); the crystal family needs
+`python -m pip install gemmi Dans-Diffraction` (plus `pymatgen` for the PXRD cross-check and
+`pyvista` for the VTK renders), which the skill asks for by name the first time a CIF job runs.
 Claude Code loads the skill at session start. Then ask for what you need: a replicate overlay
 with %RSD, a calibration curve with LOD/LOQ, a calculated PXRD pattern from a CIF, a
 cocrystal-vs-mixture call.
@@ -232,6 +234,20 @@ The 24 pectin spectra (CC BY 4.0) are vendored. Data that cannot be redistribute
 demand instead: the biospectools EMSC gold and the R `pls` gasoline set
 (`skill_validation/chemometrics/datasets/fetch.py`) and the CCDC CIFs. Every check that needs
 one of them skips cleanly when it is absent.
+
+## Known limitations
+
+- The 3D structure views re-implement the hydrogen-bond and bond criteria of `crystal_engine`
+  rather than calling them, and the figure path does not apply the engine's disorder-alternative
+  exclusion, so on a structure with disordered donor/acceptor sites a dashed contact can appear in
+  the view that the validation table suppresses. Read the table as the authority.
+- The crystal family is written for small-molecule cells: bond, geometry and H-bond searches are
+  all-pairs Python loops and the realistic-pattern profile is summed reflection by reflection, so a
+  cell with hundreds of atoms takes seconds per figure, not milliseconds.
+- The chemometrics component scan refits from scratch for every component count and
+  `permutation_test` re-preprocesses the folds for every permutation; correct, but slow on large sets.
+- `audit_layout` is a set of heuristics (tick overlap, clipping, letters, unit cues). It catches the
+  common faults; reading the saved PNG is still part of the workflow, not a formality.
 
 ## Provenance and licence
 

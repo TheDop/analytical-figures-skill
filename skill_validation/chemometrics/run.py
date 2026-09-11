@@ -25,6 +25,12 @@ MODULES = ["test_preprocessing", "test_pls", "test_pcr_pca", "test_cv", "test_vi
 
 
 def main():
+    try:
+        import sklearn  # noqa: F401  (the family's PLS/PCA/PCR core)
+    except ImportError:
+        print("SKIP: scikit-learn not installed -- the chemometrics validation suite needs it "
+              "(python -m pip install scikit-learn)")
+        return 0
     results = []
     for name in MODULES:
         try:

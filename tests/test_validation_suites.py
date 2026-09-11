@@ -16,6 +16,7 @@ def _run(path, *args):
 
 
 def test_chemometrics_validation_suite():
+    pytest.importorskip("sklearn")
     r = _run(os.path.join(ROOT, "skill_validation", "chemometrics", "run.py"))
     assert r.returncode == 0, (r.stdout[-3000:] + "\n" + r.stderr[-1500:])
 

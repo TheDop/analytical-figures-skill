@@ -76,10 +76,20 @@ def classify_ionisation(pka_acid, pka_base_conjugate,
 # indexing / FTIR (cocrystal_id.md) / SCXRD.
 
 
-def rwp(y_obs, y_calc, weight="poisson", eps=1e-12):
+def _resolve_weight(yo, weight):
+    """'auto' → 'poisson' only when every y_obs > 0 (counts-like data with a background);
+    a background-subtracted or normalised profile with true zeros gets 'unit' - under Poisson
+    weights one zero would weigh 1/eps and the Rwp would be meaningless."""
+    if weight == "auto":
+        return "poisson" if (yo.size and float(np.min(yo)) > 0) else "unit"
+    return weight
+
+
+def rwp(y_obs, y_calc, weight="auto", eps=1e-12):
     """Weighted profile residual (Rietveld goodness-of-fit):
         Rwp = sqrt( Σ w_i (y_obs_i − y_calc_i)² / Σ w_i y_obs_i² )
     Returns the FRACTION (0 = perfect; ×100 for %). weight:
+      'auto'    → (default) 'poisson' when every y_obs > 0, else 'unit' (see _resolve_weight).
       'poisson' → w_i = 1/max(y_obs_i, eps) — counting statistics, the crystallographic default
                   (assumes counts-like data with a non-zero background; on a normalised pattern
                   with true zeros prefer 'unit').
@@ -88,19 +98,20 @@ def rwp(y_obs, y_calc, weight="poisson", eps=1e-12):
     diagnostic on top of it."""
     yo = np.asarray(y_obs, float).ravel()
     yc = np.asarray(y_calc, float).ravel()
+    weight = _resolve_weight(yo, weight)
     if weight == "unit":
         w = np.ones_like(yo)
     elif weight == "poisson":
         w = 1.0 / np.maximum(yo, eps)
     else:
-        raise ValueError("weight must be 'poisson' or 'unit'")
+        raise ValueError("weight must be 'auto', 'poisson' or 'unit'")
     den = float(np.sum(w * yo ** 2))
     if den <= 0:
         return float("nan")
     return float(np.sqrt(np.sum(w * (yo - yc) ** 2) / den))
 
 
-def sum_of_parents(y_obs, parents, weight="poisson", eps=1e-12):
+def sum_of_parents(y_obs, parents, weight="auto", eps=1e-12):
     """Fit an observed pattern as a NON-NEGATIVE linear combination of the parent patterns
     (NNLS) — the physical-mixture model. A true mixture reconstructs well (low Rwp, no
     systematic unexplained peaks); a genuine new phase does NOT (the parents can't build its
@@ -127,6 +138,7 @@ def sum_of_parents(y_obs, parents, weight="poisson", eps=1e-12):
     resid = y - y_calc
     total = float(coef.sum())
     frac = coef / total if total > 0 else np.full_like(coef, np.nan)
+    weight = _resolve_weight(np.asarray(y, float).ravel(), weight)   # record the weighting actually used
     rw = rwp(y, y_calc, weight=weight, eps=eps)
     caption = (f"NNLS sum-of-parents: {coef.size} parents, relative scale "
                f"{np.array2string(frac, precision=3)} (NOT quantitative phase % — no RIR); "
@@ -154,7 +166,7 @@ def unexplained_peaks(x, residual, reference=None, kind="new", rel_height=0.05, 
     return peaks
 
 
-def phase_report(x, y_obs, parents, weight="poisson", peak_rel_height=0.05):
+def phase_report(x, y_obs, parents, weight="auto", peak_rel_height=0.05):
     """Turn-key new-phase-vs-physical-mixture report: NNLS sum-of-parents fit + Rwp + the
     new/lost unexplained-peak lists + a HEURISTIC verdict. The verdict is a detection (are
     there unexplained peaks above `peak_rel_height`?), not a magic Rwp cutoff — read it WITH

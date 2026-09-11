@@ -301,6 +301,36 @@ wheel). Cite these as references; don't embed.
 
 ---
 
+## From the pre-publication review (2026-09-11)
+
+Static review of `scripts/`, `bundle.py`, `cli.py` before the repository went public. Fixed at
+once: `cli.py --help` crash (a bare `%` in an argparse help string), the chemometrics suite
+crashing instead of skipping without scikit-learn, silent fallbacks in `correct_baseline` / `_sg` /
+the t-multiplier (now they WARN and the z quantile is exact), the FTIR dead-pixel heuristic bypassing
+the whole ingest gate for PXRD, `rwp`'s Poisson default on profiles with true zeros (now `auto`),
+`simulate_pattern`'s hard-coded Cu α1 and two silent no-ops, an undeclared `escape_tol_frac` knob.
+Deferred (real, larger):
+
+- **One H-bond / bond predicate.** `crystal_view._hbond_pairs` / `_hbond_env_atoms` and the bond
+  predicate copied across `crystal_engine.bonds` / `geometry` / `crystal_view.complete_molecules` /
+  `_bond_pairs` / `_components` re-implement the engine's criteria and omit its disorder-alternative
+  exclusion → a figure can draw a contact the table suppresses. Expose `crystal_engine.is_hbond` /
+  `is_bonded` and call them everywhere (the module's stated invariant).
+- **Vectorise the crystal geometry.** All-pairs Python loops with `np.linalg.norm` per pair and two
+  gemmi `Element` constructions per pair; cart coords + the 27-image supercell rebuilt per helper.
+  `cKDTree.query_pairs` / `query_ball_point` on a cached supercell, a covalent-radius dict, and
+  `_hbond_pairs` computed once per render → seconds to tens of milliseconds.
+- **`simulate_pattern` per-peak windows** (`searchsorted` ±10 FWHM) instead of a full-grid
+  pseudo-Voigt per reflection; matters once cell refinement loops call it hundreds of times.
+- **Cache the Dans structure / reflection list on `Structure`** so `calc_pattern`, `peak_table`,
+  `realistic_pattern` and `plot_overlay` stop re-parsing the CIF and recomputing identical
+  structure factors; run the pymatgen cross-check once per (cif, λ, window).
+- **Nested-component PLS scan**: one fit at the cap per fold, predictions for a = 1..cap by
+  truncation; cache per-fold preprocessed X across permutations in `permutation_test`.
+- **Lazy pyplot** in `style` so `cli.py` and CSV-only standalones don't pay the matplotlib import.
+- **Stop probing declared cfg fields with `getattr(cfg, name, default)`** — a dataclass field is
+  safe to access directly and a misspelt field should fail loudly.
+
 ## Suggested sequence
 
 1. Write `references/figure_selection.md` (the decision module) — pure writing, immediate consistency win.

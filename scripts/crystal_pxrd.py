@@ -181,9 +181,9 @@ def realistic_pattern(struct, cfg, x_grid=None, npoints=3000):
 
 def plot(struct, cfg, experimental=None, pattern=None):
     """Plot the calculated pattern through the house pxrd conventions (normal 2theta axis,
-    intensity). `experimental`=(2theta, I) overlays a measured trace for phase ID. We don't
-    run verify.check_trace here — the data is our own validated calc, not an ingest, and its
-    sharp Bragg peaks would trip the FTIR dead-pixel spike heuristic."""
+    intensity). `experimental`=(2theta, I) overlays a measured trace for phase ID; that trace is
+    an ingest and is gated with verify.check_trace (pxrd domain: structural checks, no FTIR
+    spike heuristic). The calculated pattern is our own validated computation, not an ingest."""
     if pattern is None:
         pattern = calc_pattern(struct, cfg)
     pcfg = replace(cfg, domain="pxrd")
@@ -192,6 +192,7 @@ def plot(struct, cfg, experimental=None, pattern=None):
     ax.plot(pattern["two_theta"], pattern["intensity"], label="calculated")
     if experimental is not None:
         ex, ey = np.asarray(experimental[0], float), np.asarray(experimental[1], float)
+        verify.check_trace(ex, ey, pcfg, name="experimental")
         if ey.size and ey.max() > 0:
             ey = ey / ey.max() * 100.0
         ax.plot(ex, ey, label="experimental")

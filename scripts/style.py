@@ -94,8 +94,11 @@ def apply_style(cfg):
     """Install the house style. Call once before plotting."""
     # Prefer scienceplots' no-latex style; fall back to the hand-rolled preset.
     try:
-        import scienceplots  # noqa: F401
-        plt.style.use(["science", "no-latex"])
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")          # scienceplots' own deprecation chatter
+            import scienceplots  # noqa: F401
+            plt.style.use(["science", "no-latex"])
     except Exception:
         plt.rcParams.update(_BASE_RC)
     plt.rcParams.update(_main_rc(cfg))

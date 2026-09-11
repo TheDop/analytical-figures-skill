@@ -126,6 +126,14 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
     ratio = _pick(cfg, "pxrd_kalpha2_ratio", CU_KA2_RATIO, ratio)
     po_hkl = _pick(cfg, "pxrd_po_axis", None, po_hkl)
     march_r = _pick(cfg, "pxrd_march_r", 1.0, march_r)
+    if cfg is not None and lam1 == CU_KA1 and getattr(cfg, "pxrd_wavelength", None):
+        lam1 = float(cfg.pxrd_wavelength)           # the α1 the reflection list was computed at
+    if kalpha2 and abs(lam1 - CU_KA1) > 1e-3 and lam2 == CU_KA2:
+        print(f"  [WARN] pxrd_realism: Kα2 doublet uses the Cu Kα2 line ({CU_KA2} Å) on an α1 of {lam1} Å - "
+              f"set pxrd_wavelength2 for a non-Cu anode, or pin pxrd_wavelength to Cu")
+    if po_hkl is not None and march_r != 1.0 and Gs is None:
+        print("  [WARN] pxrd_realism: preferred orientation requested (pxrd_po_axis) but no reciprocal "
+              "metric Gs was given - March-Dollase NOT applied")
 
     refl = list(reflections)
     if po_hkl is not None and march_r != 1.0 and Gs is not None:

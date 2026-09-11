@@ -106,7 +106,7 @@ def build_parser():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    a = sub.add_parser("spc-rsd", help="band area/height/deriv2 + %RSD over a set of .spc replicates")
+    a = sub.add_parser("spc-rsd", help="band area/height/deriv2 + %%RSD over a set of .spc replicates")
     a.add_argument("dir", help="directory of .spc files, or a glob")
     a.add_argument("--center", type=float, required=True, help="band centre in cm-1 (e.g. 1748)")
     a.add_argument("--metric", choices=("area", "height", "deriv2"), default="area")

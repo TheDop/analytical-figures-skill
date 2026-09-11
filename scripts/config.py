@@ -132,6 +132,7 @@ class Config:
     outlier_mad_n: float = 3.5           # MAD multiplier for verify.flag_outliers_mad
     tick_overlap_tol_px: float = 2.0     # audit_layout flags tick labels closer than this
     clip_tol_px: float = 2.0             # audit_layout flags non-tick text past the canvas edge by this
+    escape_tol_frac: float = 0.01        # audit_layout flags data running past the y-limits by more than this fraction of the range
     strict: bool = True                  # True => any FAIL gate raises; False => warns only
 
     # ---------------------------------------------------------------- crystallography (CIF)

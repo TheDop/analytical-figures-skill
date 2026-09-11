@@ -71,8 +71,9 @@ def check_trace(x, y, cfg, name="trace", min_points=8, require_monotonic=True):
         dx = np.diff(x)
         if not (np.all(dx > 0) or np.all(dx < 0)):
             f.append(("FAIL", "x axis is not monotonic (concatenation/parse error?)"))
-    # crude noise/spike check: a single sample dominating the dynamic range
-    if y.size and np.ptp(y) > 0:
+    # crude noise/spike check: a single sample dominating the dynamic range. An FTIR rule -
+    # sharp Bragg peaks would trip it, so the pxrd domain keeps the structural checks only.
+    if y.size and np.ptp(y) > 0 and getattr(cfg, "domain", "ftir") != "pxrd":
         spikes = np.abs(np.diff(y, 2))
         if spikes.size and spikes.max() > 0.5 * np.ptp(y):
             f.append(("WARN", "large single-sample spike - check for a dead pixel/cosmic ray"))
@@ -130,8 +131,10 @@ def summarize(values, cfg):
         from scipy import stats
         t = float(stats.t.ppf(0.5 + p / 2, df=n - 1)) if n > 1 else float("nan")
     except Exception:
-        # normal-approx fallback if scipy absent
-        z = {0.90: 1.645, 0.95: 1.960, 0.99: 2.576}.get(round(p, 2), 1.960)
+        from statistics import NormalDist              # scipy absent: exact z, and say so
+        z = float(NormalDist().inv_cdf(0.5 + p / 2))
+        print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
+              f"t at n-1={n - 1} dof (CI too narrow at small n)")
         t = z if n > 1 else float("nan")
     ci = t * sem if n > 1 else float("nan")
     caption = (f"mean ± {int(p*100)}% CI (t={t:.3f}·SEM), n={n}"

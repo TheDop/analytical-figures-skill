@@ -5707,8 +5707,7 @@ def main():
     edge_labels(b, items)
 
     finalize_figure(fig, wspace=0.12, hspace=0.06)
-    for ax, L in ((a, "a"), (b, "b")):
-        panel_letter(ax, L)
+    add_panel_labels(fig, cfg, axes=[a, b], x_offset_pt="auto")   # letters OUTSIDE the corner, aligned
     audit_layout(fig, cfg)
     save_fig(fig, os.path.join(cfg.output_dir, "pectin_calibration"), cfg)
 

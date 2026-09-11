@@ -308,11 +308,13 @@ over "candidate calibrations" over "figures of merit") goes beyond one flat grid
   ```
   A single tall grid with spacer rows makes the gaps COMPOUND (spacer height + two hspaces)
   into an uneven "big gap in the middle"; the nested grid gives one even gap, like CSS `gap`.
-- **Per-chart letters in reading order.** Sectioning/nesting breaks `add_panel_labels`'
-  single-flat-grid enumeration, so letter manually: loop the charts in reading order and call
-  `style.panel_letter(ax, s)` (inside the top-left). A coupled cal+residual pair is ONE chart
-  → one letter, on its main axes. (`audit_layout`'s one-letter-per-panel check assumes a flat
-  grid and over-counts here; confirm the lettering by reading the PNG.)
+- **Per-chart letters in reading order, OUTSIDE the corner.** Sectioning/nesting breaks
+  `add_panel_labels`' automatic enumeration, so pass the charts explicitly, in reading order:
+  `fig.canvas.draw(); style.add_panel_labels(fig, cfg, axes=[…], x_offset_pt="auto")` — the
+  letters then sit outside the top-left corner, aligned, exactly as on a flat grid. A coupled
+  cal+residual pair is ONE chart → letter only its main axes (`audit_layout` treats a residual
+  strip as part of its chart). `style.panel_letter(ax, s)` puts a letter INSIDE the corner and is
+  only for the rare panel with no margin to spare; never mix the two conventions in one figure.
 - **Direction-of-good in comparison titles.** Any FoM/comparison panel where taller/larger
   isn't self-evidently "better" states the good direction IN its title — `"Precision\n(lower
   = better)"`, `"Accuracy\n(100 = ideal)"`, `"Linearity\n(higher = better)"` — so a bar chart

@@ -246,7 +246,7 @@ def render_inline():
     fig.get_layout_engine().set(w_pad=0.04, h_pad=0.04)
     top, bot = fig.subfigures(2, 1, height_ratios=[3.0, 1.15], hspace=0.05)
     outer = top.add_gridspec(2, 2, hspace=0.20, wspace=0.16)
-    models, letters = {}, "abcd"
+    models, charts = {}, []
     for i, (name, (xs_, ys_, _pub)) in enumerate(BMC.items()):
         r, c = divmod(i, 2)
         cell = outer[r, c].subgridspec(2, 1, height_ratios=[3.2, 1], hspace=0.05)
@@ -269,7 +269,7 @@ def render_inline():
         a1.scatter(m["x"], m["resid"], zorder=3, s=12)
         a1.set_ylabel("resid.")
         a1.set_xlabel("analyte / % w/w")
-        style.panel_letter(a0, letters[i])
+        charts.append(a0)
     axf = bot.subplots(1, 3)
     short = [n.replace(" transmittance", "\ntrans.").replace(" reflectance", "\nrefl.") for n in BMC]
     fom = {
@@ -286,7 +286,9 @@ def render_inline():
             axf[k].set_ylim(0.98, 1.0)
         else:
             axf[k].set_ylim(0, max(vals) * 1.28)
-        style.panel_letter(axf[k], "efg"[k])
+        charts.append(axf[k])
+    fig.canvas.draw()                                             # settle the nested layout first
+    style.add_panel_labels(fig, cfg2, axes=charts, x_offset_pt="auto")
     save(fig, "composite_method", cfg2)
 
     # ---- composite B: specificity (full spectra · carbonyl window · ratio vs DM)
@@ -321,8 +323,7 @@ def render_inline():
     c.set_xlabel("DM / %"); c.set_ylabel("band-area ratio  I")
     c.annotate(f"$R^2$={m['r2']:.3f}", xy=(0.96, 0.06), xycoords="axes fraction", ha="right", va="bottom", fontsize="x-small")
     style.finalize_figure(fig, wspace=0.10, hspace=0.10)
-    for ax_, L in ((a, "a"), (b, "b"), (c, "c")):
-        style.panel_letter(ax_, L)
+    style.add_panel_labels(fig, cfg2, axes=[a, b, c], x_offset_pt="auto")
     save(fig, "composite_specificity", cfg2)
 
     # ---- composite C: PXRD phase ID (full range · low-angle zoom · one key) — needs gemmi + Dans

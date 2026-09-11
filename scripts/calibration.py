@@ -22,7 +22,11 @@ def _tmult(df, conf):
         from scipy import stats
         return float(stats.t.ppf(0.5 + conf / 2, df))
     except Exception:
-        return {0.90: 1.645, 0.95: 1.960, 0.99: 2.576}.get(round(conf, 2), 1.960)
+        from statistics import NormalDist              # scipy absent: exact z, and say so
+        z = float(NormalDist().inv_cdf(0.5 + conf / 2))
+        print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
+              f"t at {df} dof (bands too narrow at small n)")
+        return z
 
 
 def fit(x, y, cfg):

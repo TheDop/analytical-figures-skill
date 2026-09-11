@@ -95,7 +95,9 @@ def correct_baseline(x, y, cfg):
     if method == "arpls":
         try:
             b = _arpls(np.asarray(y, float), lam=cfg.arpls_lam)
-        except Exception:
+        except Exception as e:
+            print(f"  [WARN] baseline: arPLS failed ({type(e).__name__}: {e}) - this trace fell back to "
+                  f"rubberband; cfg.baseline no longer describes what ran for it")
             b = _rubberband(np.asarray(x, float), np.asarray(y, float))
     elif method == "rubberband":
         b = _rubberband(np.asarray(x, float), np.asarray(y, float))
@@ -158,7 +160,9 @@ def _sg(y, smooth, deriv=0, delta=1.0):
         if w <= poly:
             raise ValueError
         return savgol_filter(y, w, poly, deriv=deriv, delta=delta)
-    except Exception:
+    except Exception as e:
+        print(f"  [WARN] smooth: Savitzky-Golay unavailable or window unworkable ({type(e).__name__}) - "
+              f"{'raw trace' if deriv == 0 else 'finite-difference derivative'} used instead")
         if deriv == 0:
             return y
         d = y
