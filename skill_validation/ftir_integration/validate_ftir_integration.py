@@ -22,10 +22,9 @@ Two independent datasets:
      each calibration is reproducible from the authors' own numbers. DOX's C=O band
      (1770-1680) is the analogue of the aspirin ester C=O.
 
-The raw pectin spectra are NOT vendored (81 MB): download `Raw data.zip` from the Mendeley
-record (doi:10.17632/gkwbp3wc49.1, CC BY 4.0) and unzip it so that this path exists:
-    skill_validation/ftir_integration/pectin_mendeley/unzipped/Raw data/Calibration/
-Part A2 (re-integration) runs only when it does; A1 and B need nothing external.
+The six calibration spectra (and the eighteen sample spectra) are vendored in data/pectin/
+(Mendeley Data doi:10.17632/gkwbp3wc49.1, CC BY 4.0 — see data/pectin/README.md), so every
+part runs from a clean clone. The record's .SPA/.TIF/workbook files are not vendored.
 
 Run from anywhere (the sys.path shim resolves the skill), or bundle to a standalone with:
     python bundle.py skill_validation/ftir_integration/validate_ftir_integration.py -o standalone_validation.py
@@ -41,7 +40,7 @@ from scripts import style, verify, spectra, calibration
 
 # ====================================================================== CONFIG
 HERE = os.path.dirname(os.path.abspath(__file__))
-PECTIN_DIR = os.path.join(HERE, "pectin_mendeley", "unzipped", "Raw data", "Calibration")
+PECTIN_DIR = os.path.join(HERE, "data", "pectin", "calibration")     # vendored, CC BY 4.0 (see data/pectin/README.md)
 
 cfg = Config(
     output_dir=os.path.join(HERE, "out"),
@@ -138,7 +137,7 @@ def validate_pectin_integration():
         cfg.integration_baseline = mode
         DM, I_mine, I_pub = [], [], []
         for std, (dm, a1, a2) in PECTIN.items():
-            path = os.path.join(PECTIN_DIR, std, f"{std}-raw data.CSV")
+            path = os.path.join(PECTIN_DIR, f"{std}.csv")
             x, y = spectra.load_xy(path)
             verify.check_trace(x, y, cfg, name=std)
             bands = {b["name"]: b["area"] for b in spectra.integrate_bands(x, y, cfg)}
@@ -194,8 +193,7 @@ def main():
     if os.path.isdir(PECTIN_DIR):
         validate_pectin_integration()
     else:
-        print(f"\nA2 skipped: raw pectin spectra not found at {PECTIN_DIR}\n"
-              "   (download doi:10.17632/gkwbp3wc49.1 'Raw data.zip' and unzip there)")
+        print(f"\nA2 skipped: pectin spectra not found at {PECTIN_DIR}")
     validate_bmc()
     print("\nfigures written to", cfg.output_dir)
 

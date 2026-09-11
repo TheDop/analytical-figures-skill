@@ -37,6 +37,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Vendored data
+
+- **Pectin ATR-FTIR raw spectra** — 王 裕鑫 (Wang), *FT-IR raw data*, Mendeley Data, 2023, V1,
+  doi:10.17632/gkwbp3wc49.1, **CC BY 4.0**. The 24 raw-spectrum CSVs (6 calibration standards,
+  18 samples) are vendored in `skill_validation/ftir_integration/data/pectin/`, content unchanged,
+  file names normalised; see the README there. The record's other files are not included.
+
 ## Validation data fetched on demand (not redistributed)
 
 - **biospectools EMSC test data** — `tests/data/emsc_testdata.xlsx` from

@@ -3,8 +3,7 @@
 Goal: confirm the `analytical-figures` skill reproduces **real, published** FTIR
 quantitative-analysis-by-peak-integration results.
 
-Run: `python skill_validation/ftir_integration/validate_ftir_integration.py` (parts A1 and B
-need nothing external; A2 needs the Mendeley raw spectra, see the table) and
+Run: `python skill_validation/ftir_integration/validate_ftir_integration.py` and
 `python skill_validation/ftir_integration/groundtruth_integration_test.py` (deterministic,
 bridged into `pytest tests/`). Figures in `out/`.
 
@@ -12,7 +11,7 @@ bridged into `pytest tests/`). Figures in `out/`.
 
 | | Source | Why chosen |
 |---|---|---|
-| **A. Pectin DM** | Wang 2023, Mendeley Data `doi:10.17632/gkwbp3wc49.1`, CC BY 4.0 (**not vendored**: download `Raw data.zip` from the record and unzip into `pectin_mendeley/unzipped/`) | The **only open source with RAW spectra + areas + calibration**, so it validates the *integration* step. DM read from a band-area **ratio** `I = A_ester(~1745)/(A_ester+A_carboxylate(~1605))` — the internal-standard-ratio idea used for API/excipient calibrations. |
+| **A. Pectin DM** | Wang 2023, Mendeley Data `doi:10.17632/gkwbp3wc49.1`, CC BY 4.0 (the 24 raw-spectrum CSVs are vendored in `data/pectin/`) | The **only open source with RAW spectra + areas + calibration**, so it validates the *integration* step. DM read from a band-area **ratio** `I = A_ester(~1745)/(A_ester+A_carboxylate(~1605))` — the internal-standard-ratio idea used for API/excipient calibrations. |
 | **B. Doxorubicin / arterolane** | Bansal, Singh, Kaur, *BMC Chemistry* 15:27 (2021), `doi:10.1186/s13065-021-00752-3` | Pharma; publishes per-point peak-**area** tables (carbonyl band, baseline-corrected) for two modes. DOX C=O (1770–1680) is the analogue of an API ester C=O. |
 | **C. Diclofenac sodium** (attempted) | Fahelelbom et al., *F1000Research* (2020) `doi:10.12688/f1000research.22274.2`; raw data Harvard Dataverse `doi:10.7910/DVN/6SJZ7W` | Procedure fully stated (first-derivative AUC, 1550–1605 cm⁻¹) **and** raw spectra deposited — structurally the "unicorn". **But the deposit is corrupted:** the 1.0% standard column is byte-identical to 0.8%, spectra are decimated to ~7.7 cm⁻¹ (~8 pts/band), and 0.6% is out of order. No AUC definition reproduces their Y=1.375X−0.014 / R²=0.9994 → **not reproducible**. |
 

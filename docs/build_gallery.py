@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 build_gallery.py — the README gallery, the GitHub Pages gallery and the social-preview card,
-all from ONE manifest, using only figures the shipped code produces on public data, public
-CIFs, or the synthetic validation set. Nothing here is drawn by hand.
+all from ONE manifest, using only figures the shipped code produces on public data and public
+CIFs. Nothing here is drawn by hand and nothing is synthetic.
 
     python docs/build_gallery.py            # re-run the producers (~1-2 min), then compose
     python docs/build_gallery.py --no-run   # compose from the producers' existing out/ figures
@@ -10,15 +10,23 @@ CIFs, or the synthetic validation set. Nothing here is drawn by hand.
 Outputs (all under docs/):
     gallery/tiles/<id>.png    square thumbnails (the README table + the Pages grid)
     gallery/full/<id>.png     full-resolution copies (the click-through targets)
-    gallery/social.png        2:1 mosaic with the title card (upload as the GitHub social preview)
+    gallery/social.png        2:1 mosaic, darkened, title centred (upload as the GitHub social preview)
     index.html                the Pages gallery: hover a tile for its placard (plain HTML + CSS)
     ../README.md              the tile table, written between <!-- gallery:start/end --> markers
+
+Data behind the tiles:
+    Wang 2023 pectin ATR-FTIR spectra, Mendeley Data 10.17632/gkwbp3wc49.1, CC BY 4.0
+        (vendored: skill_validation/ftir_integration/data/pectin/)
+    Bansal, Singh & Kaur 2021, BMC Chemistry 15:27 — the published peak-area tables
+    Crystallography Open Database CIFs (aspirin 7247819, urea 1008785, lactose 2206486,
+        flufenamic acid 4118081)
 
 Rebuild only when a producer or a tile changes — the PNGs are committed, and every rebuild adds
 to the repository history.
 """
 import os
 import sys
+import glob
 import html
 import shutil
 import subprocess
@@ -34,6 +42,13 @@ PAGES_URL = "https://thedop.github.io/analytical-figures-skill/"
 
 V = "skill_validation"
 CR, FT = f"{V}/crystal", f"{V}/ftir_integration"
+PECTIN = os.path.join(ROOT, FT, "data", "pectin")
+CIFS = os.path.join(ROOT, CR, "cifs")
+
+WANG = "Wang 2023 pectin ATR-FTIR spectra, Mendeley Data 10.17632/gkwbp3wc49.1 (CC BY 4.0)"
+BMC_SRC = "Bansal, Singh & Kaur 2021, BMC Chemistry 15:27, 10.1186/s13065-021-00752-3 (published peak-area tables)"
+COD3 = "Aspirin COD 7247819, urea COD 1008785, lactose COD 2206486 (Crystallography Open Database)"
+ASP = "Aspirin, COD 7247819"
 
 # ---------------------------------------------------------------- producers (shipped scripts)
 PRODUCERS = [
@@ -42,7 +57,6 @@ PRODUCERS = [
     f"{CR}/crystal_demo.py",
     f"{CR}/test_realism_cif.py",
     f"{CR}/test_ellipsoid.py",
-    f"{CR}/test_pxrd.py",
     f"{CR}/test_pyvista.py",          # optional: skipped when pyvista is absent
 ]
 
@@ -50,82 +64,61 @@ PRODUCERS = [
 # id, source PNG (relative to the skill root; INLINE:<name> for tiles rendered below),
 # caption, data provenance, producing script
 MANIFEST = [
+    ("composite_method", "INLINE:composite_method",
+     "Method-comparison page figure: four calibrations, each over its own residual strip, and the figures of merit with the direction of good in every title",
+     BMC_SRC, "docs/build_gallery.py → scripts/calibration.fit + lod_loq, style.panel_letter"),
+    ("composite_specificity", "INLINE:composite_specificity",
+     "Specificity composite: the full spectra, the carbonyl window with both integration windows on one shared baseline, and the band-area ratio it yields against DM",
+     WANG, "docs/build_gallery.py → scripts/spectra.integrate_bands (shared baseline), calibration.fit"),
+    ("composite_pxrd", "INLINE:composite_pxrd",
+     "Phase-ID composite: stacked calculated patterns over the full range and the low-angle window, one right-margin key serving both panels",
+     COD3, "docs/build_gallery.py → scripts/crystal_pxrd.calc_pattern, spectra.edge_labels"),
+    ("pls_diag", "INLINE:pls_diagnostics",
+     "Leakage-safe PLS diagnostics on six real standards: RMSECV per preprocessing with the parsimony pick ringed, coefficients, scores, loadings",
+     WANG + " — the six calibration standards, leave-one-out", "docs/build_gallery.py → scripts/chemometrics.diagnostics_figure"),
     ("calib_pectin", f"{FT}/out/pectin_calibration_published.png",
      "Calibration with confidence and prediction bands and the mandatory residual panel",
-     "Pectin degree of methyl-esterification by FTIR — Wang 2023, Mendeley Data 10.17632/gkwbp3wc49.1 (CC BY 4.0)",
-     f"{FT}/validate_ftir_integration.py"),
+     WANG + " — the authors' published band areas", f"{FT}/validate_ftir_integration.py"),
     ("waterfall", "INLINE:waterfall",
-     "Replicate waterfall: reps overlaid per level, levels offset, right-margin keys instead of a legend",
-     "Synthetic binary mixture, 6 levels × 3 reps with multiplicative loading variation (skill_validation/chemometrics/_data.py)",
-     "docs/build_gallery.py → scripts/spectra.plot_waterfall"),
-    ("pls_diag", "INLINE:pls_diagnostics",
-     "Leakage-safe PLS diagnostics: RMSECV per preprocessing with the parsimony pick, coefficients, scores, loadings",
-     "Synthetic binary mixture (skill_validation/chemometrics/_data.py), leave-one-level-out CV",
-     "docs/build_gallery.py → scripts/chemometrics.diagnostics_figure"),
-    ("pxrd_overlay", f"{CR}/out/crystal_demo/pxrd_overlay.png",
-     "Stacked calculated PXRD patterns for phase discrimination",
-     "Aspirin COD 7247819, urea COD 1008785, lactose COD 2206486 — Crystallography Open Database",
-     f"{CR}/crystal_demo.py"),
+     "Waterfall of the six calibration standards, right-margin keys instead of a legend",
+     WANG, "docs/build_gallery.py → scripts/spectra.plot_waterfall"),
+    ("ddsimca", "INLINE:ddsimca",
+     "DD-SIMCA acceptance plot of eighteen replicate sample spectra: all inside the acceptance boundary, the extreme and outlier limits drawn",
+     WANG + " — the eighteen sample spectra (6 preparations × 3 replicates), SNV, 2 PCs", "docs/build_gallery.py → scripts/chemometrics.diagnostics + plot_influence"),
+    ("integration", "INLINE:integration",
+     "Two overlapping bands on one shared baseline with the vertical drop at the window boundary — the drop-perpendicular method the validation showed is required",
+     WANG + " — the DM 70.5 % standard", "docs/build_gallery.py → scripts/spectra.integrate_bands"),
     ("ortep", f"{CR}/out/crystal_demo/structure_ellipsoid.png",
      "ORTEP displacement ellipsoids at 50 % probability, deterministic PCA camera",
-     "Aspirin, COD 7247819 (296 K)",
-     f"{CR}/crystal_demo.py"),
-    ("ddsimca", "INLINE:ddsimca",
-     "DD-SIMCA acceptance plot: regular / extreme / outlier, with the chi-squared boundary",
-     "Synthetic binary mixture plus one under-loaded and one baseline-tilted replicate injected",
-     "docs/build_gallery.py → scripts/chemometrics.diagnostics + plot_influence"),
-    ("integration", "INLINE:integration",
-     "Band area on algorithmic anchors: the flanking minima found once and locked for the whole batch",
-     "Synthetic binary mixture (skill_validation/chemometrics/_data.py)",
-     "docs/build_gallery.py → scripts/spectra.find_anchors"),
+     ASP + " (296 K)", f"{CR}/crystal_demo.py"),
     ("calib_bmc", f"{FT}/out/bmc_dox_transmittance.png",
      "Doxorubicin carbonyl-area calibration; LOD/LOQ from the residual SD, and the sigma is named",
-     "Bansal, Singh & Kaur 2021, BMC Chemistry 15:27, 10.1186/s13065-021-00752-3 (published area table)",
-     f"{FT}/validate_ftir_integration.py"),
+     BMC_SRC, f"{FT}/validate_ftir_integration.py"),
     ("groundtruth", f"{FT}/out/groundtruth_shared_vs_perwindow.png",
      "Shared vs per-window baseline against a closed-form answer: the per-window pedestal bias, measured",
-     "Analytic Gaussian bands with known areas, checked against scipy.integrate.quad",
-     f"{FT}/groundtruth_integration_test.py"),
+     "Analytic Gaussian bands with known areas, checked against scipy.integrate.quad", f"{FT}/groundtruth_integration_test.py"),
     ("pxrd_calc", f"{CR}/out/crystal_demo/pxrd.png",
      "Calculated PXRD from a CIF at Cu Kα, top peak cross-checked against pymatgen",
-     "Aspirin, COD 7247819",
-     f"{CR}/crystal_demo.py"),
+     ASP, f"{CR}/crystal_demo.py"),
     ("pxrd_realism", f"{CR}/out/_realism_aspirin.png",
      "Lab-realistic pattern: Cu Kα₁/Kα₂ doublet and Caglioti broadening on the Dans reflection list",
-     "Aspirin, COD 7247819",
-     f"{CR}/test_realism_cif.py"),
+     ASP, f"{CR}/test_realism_cif.py"),
     ("packing", f"{CR}/out/crystal_demo/packing.png",
-     "Packing diagram down a with hydrogen bonds and the cell box",
-     "Aspirin, COD 7247819",
-     f"{CR}/crystal_demo.py"),
+     "Packing diagram down a with hydrogen bonds and the cell box", ASP, f"{CR}/crystal_demo.py"),
     ("hbond_env", f"{CR}/out/crystal_demo/hbond_environment.png",
-     "Hydrogen-bond environment of the asymmetric unit, symmetry mates superscripted",
-     "Aspirin, COD 7247819",
-     f"{CR}/crystal_demo.py"),
+     "Hydrogen-bond environment of the asymmetric unit, symmetry mates superscripted", ASP, f"{CR}/crystal_demo.py"),
     ("unit_cell", f"{CR}/out/crystal_demo/unit_cell.png",
-     "Unit-cell contents with the cell box and a/b/c",
-     "Aspirin, COD 7247819",
-     f"{CR}/crystal_demo.py"),
+     "Unit-cell contents with the cell box and a/b/c", ASP, f"{CR}/crystal_demo.py"),
     ("flufenamic", f"{CR}/out/_ellipsoid_disorder-groups_flufenamic.png",
      "Z′ = 3 with CF₃ disorder groups honoured: no bonds between mutually exclusive sites",
-     "Flufenamic acid, COD 4118081",
-     f"{CR}/test_ellipsoid.py"),
-    ("pxrd_urea", f"{CR}/out/_pxrd_specialpos_urea.png",
-     "Calculated PXRD of a molecule on a special position: multiplicity handled in the expansion",
-     "Urea, COD 1008785",
-     f"{CR}/test_pxrd.py"),
-    ("ballstick", f"{CR}/out/crystal_demo/structure.png",
-     "Ball-and-stick, PCA face-on, C–H hidden, heteroatoms labelled",
-     "Aspirin, COD 7247819",
-     f"{CR}/crystal_demo.py"),
+     "Flufenamic acid, COD 4118081", f"{CR}/test_ellipsoid.py"),
     ("pyvista", f"{CR}/out/_pyvista_aspirin.png",
      "PyVista/VTK still: real depth buffer, ambient occlusion, orthographic camera from the same orientation engine",
-     "Aspirin, COD 7247819",
-     f"{CR}/test_pyvista.py"),
+     ASP, f"{CR}/test_pyvista.py"),
 ]
 
 TITLE = "analytical-figures"
-TAGLINE = ["Publication-grade figures and the gated", "analysis behind them, for analytical chemistry."]
+TAGLINE = "Publication-grade figures and the gated analysis behind them, for analytical chemistry."
 FOOT = "Claude Code skill  ·  MIT  ·  github.com/TheDop/analytical-figures-skill"
 
 
@@ -143,67 +136,230 @@ def run_producers():
 
 
 # ---------------------------------------------------------------- 2. tiles rendered here
+def _load_module(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
 def render_inline():
-    """Four tiles drawn with the skill's own modules on the synthetic validation set."""
+    """Tiles drawn with the skill's own modules on the vendored pectin spectra, the BMC 2021
+    area tables and the COD CIFs. Returns {INLINE name: PNG path}."""
     import numpy as np
+    import matplotlib.pyplot as plt
+    from dataclasses import replace
     sys.path.insert(0, ROOT)
     from scripts.config import Config
-    from scripts import style, spectra, chemometrics
+    from scripts import style, spectra, chemometrics, calibration
 
-    spec = importlib.util.spec_from_file_location("_data", os.path.join(ROOT, V, "chemometrics", "_data.py"))
-    data = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(data)
-    x, X, y, groups = data.synth(n_levels=6, reps=3, n_wave=400, seed=0, noise=0.002)
+    # the transcribed published numbers live in ONE place: the validation script
+    val = _load_module(os.path.join(ROOT, FT, "validate_ftir_integration.py"), "vfi")
+    PECTIN_DM, BMC = val.PECTIN, val.BMC
+
     os.makedirs(INLINE, exist_ok=True)
     cfg = Config(output_dir=INLINE, formats=("png",), journal="nature", column="single",
-                 domain="ftir", strict=False, description="gallery tile — synthetic validation set")
+                 domain="ftir", strict=False, description="gallery tile")
+    cfg2 = replace(cfg, column="double")
+    pal = style._palette(cfg)
     out = {}
 
-    # (a) replicate waterfall with edge labels
-    levels = sorted(set(groups))
-    wf = {f"{y[groups == g][0]:.0f} % w/w": [(x, X[i]) for i in np.where(groups == g)[0]] for g in levels}
-    fig, ax = spectra.plot_waterfall(wf, cfg)
-    style.save_fig(fig, os.path.join(INLINE, "waterfall"), cfg)
-    out["waterfall"] = os.path.join(INLINE, "waterfall.png")
+    def save(fig, name, c=cfg):
+        style.save_fig(fig, os.path.join(INLINE, name), c)
+        out[name] = os.path.join(INLINE, name + ".png")
 
-    # (b) band area on locked algorithmic anchors
-    i = int(np.where(groups == levels[3])[0][0])
-    lo, hi = spectra.find_anchors(x, X[i], 1748.0, gap=12.0, maxhw=60.0)
-    xs, ys = x[::-1], X[i][::-1]                                  # ascending for interp
+    # ---- the pectin standards (real ATR-FTIR, DM known) and samples (6 preparations × 3 reps)
+    std = {}
+    for s in PECTIN_DM:
+        x, y = spectra.load_xy(os.path.join(PECTIN, "calibration", f"{s}.csv"))
+        x, y = np.asarray(x, float), np.asarray(y, float)
+        o = np.argsort(x)
+        std[s] = (x[o], y[o])                                     # ascending
+    dm_pct = {s: PECTIN_DM[s][0] * 100.0 for s in PECTIN_DM}
+    x0 = std["DM3"][0]
+    samples = {}
+    for p in sorted(glob.glob(os.path.join(PECTIN, "samples", "*.csv"))):
+        x, y = spectra.load_xy(p)
+        x, y = np.asarray(x, float), np.asarray(y, float)
+        o = np.argsort(x)
+        samples[os.path.splitext(os.path.basename(p))[0]] = np.interp(x0, x[o], y[o])
+    fp = (x0 >= 800) & (x0 <= 1900)                               # fingerprint + carbonyl window
+    xd = x0[fp][::-1]                                             # descending, the FTIR convention
+
+    # (a) waterfall of the six standards, right-margin keys
+    wf = {f"DM {dm_pct[s]:.0f} %": [(xd, std[s][1][fp][::-1])] for s in PECTIN_DM}
+    fig, ax = spectra.plot_waterfall(wf, cfg)
+    save(fig, "waterfall")
+
+    # (b) two overlapping bands on one SHARED baseline (vertical drop at 1700 cm-1)
+    icfg = replace(cfg, integration_baseline="shared",
+                   integration_windows=[(1500, 1700, "carbox"), (1700, 1800, "ester")])
+    xs, ys = std["DM70.5"]
+    lo, hi, split = 1500.0, 1800.0, 1700.0
     ylo, yhi = np.interp(lo, xs, ys), np.interp(hi, xs, ys)
+    bands = {b["name"]: b["area"] for b in spectra.integrate_bands(xs, ys, icfg)}
     style.apply_style(cfg)
     fig, ax = style.figure(cfg)
-    ax.plot(x, X[i], lw=0.9)
-    m = (xs >= lo) & (xs <= hi)
-    base = np.interp(xs[m], [lo, hi], [ylo, yhi])
-    ax.fill_between(xs[m], base, ys[m], alpha=0.30, lw=0)
+    ax.plot(xs, ys, lw=0.9, color="k")
+    for k, (a, b) in enumerate(((lo, split), (split, hi))):
+        m = (xs >= a) & (xs <= b)
+        base = np.interp(xs[m], [lo, hi], [ylo, yhi])
+        ax.fill_between(xs[m], base, ys[m], alpha=0.35, lw=0, color=pal[k])
     ax.plot([lo, hi], [ylo, yhi], color="0.25", lw=0.8, ls="--")
+    ax.plot([split, split], [np.interp(split, [lo, hi], [ylo, yhi]), np.interp(split, xs, ys)],
+            color="0.25", lw=0.8, ls="--")
     ax.plot([lo, hi], [ylo, yhi], "o", color="0.25", ms=3)
     spectra._apply_axis(ax, cfg)
-    ax.set_xlim(1800, 1560)
-    ax.set_title(f"ester C=O area, anchors locked at {lo:.0f} / {hi:.0f} cm⁻¹", fontsize="small")
-    style.save_fig(fig, os.path.join(INLINE, "integration"), cfg)
-    out["integration"] = os.path.join(INLINE, "integration.png")
+    ax.set_xlim(1850, 1450)
+    ratio_705 = bands["ester"] / (bands["ester"] + bands["carbox"])
+    ax.set_title(f"shared baseline {lo:.0f}–{hi:.0f} cm⁻¹, drop at {split:.0f}: "
+                 f"ester/(ester+carboxylate) = {ratio_705:.3f}", fontsize="small")
+    save(fig, "integration")
 
-    # (c) PLS diagnostics 2x2 (leave-one-LEVEL-out) — a 2x2 needs the double-column width;
-    #     settle the constrained layout before export so no label is clipped
-    from dataclasses import replace
-    cfg2 = replace(cfg, column="double")
-    fig, axes, info = chemometrics.diagnostics_figure(X, y, x, cfg2, groups=groups, basename="pls_diagnostics")
-    style.finalize_figure(fig, wspace=0.12, hspace=0.22)
-    style.save_fig(fig, os.path.join(INLINE, "pls_diagnostics"), cfg2)
-    out["pls_diagnostics"] = os.path.join(INLINE, "pls_diagnostics.png")
+    # (c) PLS diagnostics on the six standards (leave-one-out)
+    X = np.vstack([std[s][1][fp] for s in PECTIN_DM])
+    y = np.array([dm_pct[s] for s in PECTIN_DM])
+    fig, (pa, pb, pc, pd), info = chemometrics.diagnostics_figure(X, y, x0[fp], cfg2, basename="pls_diagnostics")
+    cb = getattr(pc.collections[0], "colorbar", None)          # six labelled standards need no colour bar
+    if cb is not None:
+        cb.remove()                                           # Colorbar.remove also clears the axes bookkeeping
+    for ax_ in [ax_ for ax_ in fig.axes if ax_ not in (pa, pb, pc, pd)]:
+        ax_.remove()
+    pc._colorbars = []                                        # belt and braces for the layout engine
+    for (sx, sy), dm in zip(pc.collections[0].get_offsets(), y):
+        pc.annotate(f"DM {dm:.0f} %", (sx, sy), xytext=(4, 4), textcoords="offset points", fontsize="x-small")
+    style.finalize_figure(fig, wspace=0.08, hspace=0.16)
+    save(fig, "pls_diagnostics", cfg2)
 
-    # (d) DD-SIMCA acceptance plot with two injected bad replicates
-    X2 = X.copy()
-    X2[4] = X2[4] * 0.45                                          # under-loaded
-    X2[13] = X2[13] + 0.03 * np.linspace(0, 1, x.size)            # baseline tilt
-    diag = chemometrics.diagnostics(X2, cfg, n_components=2, pre="none")
+    # (d) DD-SIMCA on the eighteen replicate sample spectra
+    names = list(samples)
+    Xs = np.vstack([samples[n][fp] for n in names])
+    diag = chemometrics.diagnostics(Xs, cfg, n_components=2, pre="snv")
     style.apply_style(cfg)
     fig, ax = style.figure(cfg)
-    chemometrics.plot_influence(ax, diag, cfg, labels=[f"s{k}" for k in range(X2.shape[0])])
-    style.save_fig(fig, os.path.join(INLINE, "ddsimca"), cfg)
-    out["ddsimca"] = os.path.join(INLINE, "ddsimca.png")
+    chemometrics.plot_influence(ax, diag, cfg, labels=names)
+    save(fig, "ddsimca")
+
+    # ---- composite A: method-comparison page figure (BMC 2021 — four calibrations + FoM row)
+    style.apply_style(cfg2)
+    fig = plt.figure(figsize=(7.0, 6.2), layout="constrained")
+    fig.get_layout_engine().set(w_pad=0.04, h_pad=0.04)
+    top, bot = fig.subfigures(2, 1, height_ratios=[3.0, 1.15], hspace=0.05)
+    outer = top.add_gridspec(2, 2, hspace=0.20, wspace=0.16)
+    models, letters = {}, "abcd"
+    for i, (name, (xs_, ys_, _pub)) in enumerate(BMC.items()):
+        r, c = divmod(i, 2)
+        cell = outer[r, c].subgridspec(2, 1, height_ratios=[3.2, 1], hspace=0.05)
+        a0 = top.add_subplot(cell[0]); a1 = top.add_subplot(cell[1], sharex=a0)
+        m = calibration.fit(xs_, ys_, cfg2); models[name] = m
+        xx = np.linspace(*m["x_range"], 100)
+        se_mean = m["s_resid"] * np.sqrt(1.0 / m["n"] + (xx - m["xbar"]) ** 2 / m["Sxx"])
+        se_pred = m["s_resid"] * np.sqrt(1.0 + 1.0 / m["n"] + (xx - m["xbar"]) ** 2 / m["Sxx"])
+        yy = m["slope"] * xx + m["intercept"]
+        a0.fill_between(xx, yy - m["t"] * se_mean, yy + m["t"] * se_mean, alpha=0.25, lw=0)
+        a0.plot(xx, yy - m["t"] * se_pred, lw=0.6, ls="--", color="0.5")
+        a0.plot(xx, yy + m["t"] * se_pred, lw=0.6, ls="--", color="0.5")
+        a0.plot(xx, yy, lw=1.0)
+        a0.scatter(m["x"], m["y"], zorder=3, s=12)
+        a0.set_title(name, fontsize="small")
+        a0.set_ylabel("peak area / mm²")
+        a0.annotate(f"$R^2$={m['r2']:.4f}", xy=(0.96, 0.06), xycoords="axes fraction", ha="right", va="bottom", fontsize="x-small")
+        plt.setp(a0.get_xticklabels(), visible=False)
+        a1.axhline(0, color="0.6", lw=0.6)
+        a1.scatter(m["x"], m["resid"], zorder=3, s=12)
+        a1.set_ylabel("resid.")
+        a1.set_xlabel("analyte / % w/w")
+        style.panel_letter(a0, letters[i])
+    axf = bot.subplots(1, 3)
+    short = [n.replace(" transmittance", "\ntrans.").replace(" reflectance", "\nrefl.") for n in BMC]
+    fom = {
+        "Linearity $R^2$\n(higher = better)": [models[n]["r2"] for n in BMC],
+        "LOD / % w/w\n(lower = better)": [calibration.lod_loq(models[n], cfg2)["lod"] for n in BMC],
+        "LOQ / % w/w\n(lower = better)": [calibration.lod_loq(models[n], cfg2)["loq"] for n in BMC],
+    }
+    for k, (ttl, vals) in enumerate(fom.items()):
+        axf[k].bar(range(len(vals)), vals, color=[pal[j % len(pal)] for j in range(len(vals))],
+                   edgecolor="k", linewidth=0.5)
+        axf[k].set_xticks(range(len(vals))); axf[k].set_xticklabels(short, fontsize="x-small")
+        axf[k].set_title(ttl, fontsize="small")
+        if "R^2" in ttl:
+            axf[k].set_ylim(0.98, 1.0)
+        else:
+            axf[k].set_ylim(0, max(vals) * 1.28)
+        style.panel_letter(axf[k], "efg"[k])
+    save(fig, "composite_method", cfg2)
+
+    # ---- composite B: specificity (full spectra · carbonyl window · ratio vs DM)
+    style.apply_style(cfg2)
+    fig, axes = style.figure(cfg2, 2, 2, height_ratios=[1.0, 1.15])
+    gs = axes[0, 0].get_gridspec()
+    for ax_ in axes[0]:
+        ax_.remove()
+    a = fig.add_subplot(gs[0, :])
+    b, c = axes[1, 0], axes[1, 1]
+    for k, s in enumerate(PECTIN_DM):
+        xs_, ys_ = std[s]
+        a.plot(xs_, ys_, lw=0.6, color=pal[k % len(pal)])
+        w = (xs_ >= 1450) & (xs_ <= 1850)
+        b.plot(xs_[w], ys_[w], lw=0.8, color=pal[k % len(pal)])
+    spectra._apply_axis(a, cfg2); a.set_ylabel("Absorbance")
+    b.axvspan(1500, 1700, alpha=0.12, color=pal[0], lw=0)
+    b.axvspan(1700, 1800, alpha=0.12, color=pal[1], lw=0)
+    b.axvline(1700, color="0.3", lw=0.6, ls="--")
+    spectra._apply_axis(b, cfg2); b.set_xlim(1850, 1450); b.set_ylabel("")
+    b.set_title("carboxylate 1500–1700 · ester 1700–1800", fontsize="small")
+    ratio = []
+    for s in PECTIN_DM:
+        xs_, ys_ = std[s]
+        bb = {q["name"]: q["area"] for q in spectra.integrate_bands(xs_, ys_, icfg)}
+        ratio.append(bb["ester"] / (bb["ester"] + bb["carbox"]))
+    ratio = np.array(ratio)
+    m = calibration.fit(y, ratio, cfg2)
+    xx = np.linspace(*m["x_range"], 50)
+    c.plot(xx, m["slope"] * xx + m["intercept"], lw=1.0, color="0.3")
+    c.scatter(y, ratio, zorder=3, s=14, color=[pal[k % len(pal)] for k in range(len(y))])
+    c.set_xlabel("DM / %"); c.set_ylabel("band-area ratio  I")
+    c.annotate(f"$R^2$={m['r2']:.3f}", xy=(0.96, 0.06), xycoords="axes fraction", ha="right", va="bottom", fontsize="x-small")
+    style.finalize_figure(fig, wspace=0.10, hspace=0.10)
+    for ax_, L in ((a, "a"), (b, "b"), (c, "c")):
+        style.panel_letter(ax_, L)
+    save(fig, "composite_specificity", cfg2)
+
+    # ---- composite C: PXRD phase ID (full range · low-angle zoom · one key) — needs gemmi + Dans
+    try:
+        from scripts import crystal_engine as ce, crystal_pxrd as cp
+        pcfg = replace(cfg2, domain="pxrd", pxrd_two_theta_min=5, pxrd_two_theta_max=50, pxrd_wavelength=1.540598)
+        pats = []
+        for label, cif in (("aspirin", "monoclinic_aspirin__COD7247819.cif"),
+                           ("urea", "specialpos_urea__COD1008785.cif"),
+                           ("lactose", "lactose__COD2206486.cif")):
+            ccfg = replace(pcfg, cif_path=os.path.join(CIFS, cif))
+            pats.append((label, cp.calc_pattern(ce.load(ccfg), ccfg)))
+        style.apply_style(pcfg)
+        fig, (a, b) = style.figure(pcfg, 1, 2, width_ratios=[2.0, 1.0], sharey=True)
+        items = []
+        for k, (label, pat) in enumerate(pats):
+            tt, ii = np.asarray(pat["two_theta"], float), np.asarray(pat["intensity"], float)
+            if not np.isfinite(ii).all() or ii.max() <= 0:
+                raise RuntimeError(f"empty calculated pattern for {label}")
+            ii = ii / ii.max()
+            off = k * 1.08
+            col = pal[k % len(pal)]
+            a.plot(tt, ii + off, lw=0.7, color=col)
+            z = (tt >= 5) & (tt <= 20)
+            b.plot(tt[z], ii[z] + off, lw=0.7, color=col)
+            items.append((off + 0.5, label, col))
+        spectra._apply_axis(a, pcfg); spectra._apply_axis(b, pcfg)
+        a.set_ylabel("Intensity (normalised, offset)"); b.set_ylabel("")
+        a.set_xlim(5, 50); b.set_xlim(5, 20)
+        a.set_yticks([]); b.tick_params(labelleft=False)
+        b.set_title("low-angle window", fontsize="small")
+        spectra.edge_labels(b, items)
+        style.finalize_figure(fig, wspace=0.10)
+        style.add_panel_labels(fig, pcfg)
+        save(fig, "composite_pxrd", pcfg)
+    except ImportError as e:
+        print(f"  composite_pxrd skipped ({e})")
     return out
 
 
@@ -236,8 +392,7 @@ def compose(entries):
     tiles = {}
     for e in entries:
         im = Image.open(e["png"])
-        # full-resolution copy, long side capped so the repository stays small
-        cap = 1400
+        cap = 1400                                    # long side capped so the repository stays small
         if max(im.size) > cap:
             s = cap / max(im.size)
             full = im.convert("RGB").resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
@@ -248,25 +403,41 @@ def compose(entries):
         t.save(os.path.join(TILES, e["id"] + ".png"), optimize=True)
         tiles[e["id"]] = t
 
-    # social card: 6 x 3 grid, title card over the first two slots
+    # social card: full-bleed 6 x 3 mosaic, darkened, the title centred over it
     gap, tile, cols, rows = 12, 384, 6, 3
     W, H = cols * tile + (cols + 1) * gap, rows * tile + (rows + 1) * gap
     card = Image.new("RGB", (W, H), "#e6e9ee")
-    slots = [(r, c) for r in range(rows) for c in range(cols)][2:]            # slot 0-1 = title card
+    slots = [(r, c) for r in range(rows) for c in range(cols)]
     for (r, c), e in zip(slots, entries):
-        x0, y0 = gap + c * (tile + gap), gap + r * (tile + gap)
-        card.paste(tiles[e["id"]].resize((tile, tile), Image.LANCZOS), (x0, y0))
-    x0, y0 = gap, gap
-    box = Image.new("RGB", (2 * tile + gap, tile), "white")
-    d = ImageDraw.Draw(box)
-    d.text((34, 60), TITLE, font=_font("DejaVuSans-Bold.ttf", 66), fill="#1b1f24")
-    for k, line in enumerate(TAGLINE):
-        d.text((36, 170 + k * 38), line, font=_font("DejaVuSans.ttf", 27), fill="#3b4048")
-    d.text((36, 312), FOOT, font=_font("DejaVuSans.ttf", 19), fill="#6b7280")
-    d.rectangle([0, tile - 6, 2 * tile + gap, tile], fill="#0b5fff")
-    card.paste(box, (x0, y0))
-    card.save(os.path.join(GAL, "social.png"), optimize=True)
-    print(f"  social.png {W}x{H}, {len(entries)} tiles")
+        card.paste(tiles[e["id"]].resize((tile, tile), Image.LANCZOS),
+                   (gap + c * (tile + gap), gap + r * (tile + gap)))
+    card = Image.alpha_composite(card.convert("RGBA"),
+                                 Image.new("RGBA", (W, H), (12, 14, 20, 150)))
+    import numpy as np
+    yy = np.arange(H)
+    prof = np.clip(np.cos((yy - H / 2) / (0.32 * H) * np.pi / 2), 0, 1) ** 1.5   # 1 at centre -> 0 at ±32 %
+    band = np.zeros((H, W, 4), dtype=np.uint8)
+    band[..., :3] = (8, 10, 16)
+    band[..., 3] = (prof * 120)[:, None].astype(np.uint8)
+    card = Image.alpha_composite(card, Image.fromarray(band, "RGBA")).convert("RGB")
+    d = ImageDraw.Draw(card)
+    f_title, f_tag, f_foot = (_font("DejaVuSans-Bold.ttf", 118), _font("DejaVuSans.ttf", 36),
+                              _font("DejaVuSans.ttf", 26))
+
+    def centred(text, font, y, fill):
+        x0, y0, x1, y1 = d.textbbox((0, 0), text, font=font)
+        d.text(((W - (x1 - x0)) / 2 - x0, y), text, font=font, fill=fill)
+        return y1 - y0
+
+    y = H / 2 - 150
+    h = centred(TITLE, f_title, y, "white")
+    d.rectangle([W / 2 - 90, y + h + 34, W / 2 + 90, y + h + 40], fill="#4f8dff")
+    centred(TAGLINE, f_tag, y + h + 74, "#e8ebf0")
+    centred(FOOT, f_foot, y + h + 140, "#aab2bf")
+    tmp = os.path.join(GAL, "_social_tmp.png")
+    card.save(tmp, optimize=True)
+    os.replace(tmp, os.path.join(GAL, "social.png"))
+    print(f"  social.png {W}x{H}, {min(len(entries), len(slots))} tiles")
 
 
 # ---------------------------------------------------------------- 4. README table + Pages
@@ -288,8 +459,8 @@ def write_readme_table(entries, cols=6):
         rows.append("<tr>" + "".join(cells) + "</tr>")
     table = ("<table>\n" + "\n".join(rows) + "\n</table>\n\n"
              "<sub>Hover a tile for what it is and where the data came from; click for full size. Every tile is "
-             f"produced by <code>docs/build_gallery.py</code> from public data, public CIFs or the synthetic validation "
-             f"set — nothing is drawn by hand. Interactive version with placards: <a href=\"{PAGES_URL}\">{PAGES_URL}</a></sub>")
+             f"produced by <code>docs/build_gallery.py</code> from public data and public CIFs — nothing is drawn "
+             f"by hand and nothing is synthetic. Interactive version with placards: <a href=\"{PAGES_URL}\">{PAGES_URL}</a></sub>")
     s = s[: s.index(a) + len(a)] + "\n" + table + "\n" + s[s.index(b):]
     open(p, "w", encoding="utf-8", newline="\n").write(s)
     print(f"  README table: {len(entries)} tiles")
@@ -311,7 +482,7 @@ def write_pages(entries):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{TITLE} — gallery</title>
 <meta property="og:title" content="{TITLE}">
-<meta property="og:description" content="{' '.join(TAGLINE)}">
+<meta property="og:description" content="{TAGLINE}">
 <meta property="og:image" content="{PAGES_URL}gallery/social.png">
 <style>
 :root{{--bg:#f3f4f6;--card:#fff;--ink:#1b1f24;--muted:#57606a;--accent:#0b5fff}}
@@ -341,15 +512,15 @@ footer a{{color:var(--accent)}}
 <body>
 <header>
   <h1>{TITLE}</h1>
-  <p class="tag">{' '.join(TAGLINE)} A <a href="{REPO_URL}">Claude Code skill</a>.</p>
+  <p class="tag">{TAGLINE} A <a href="{REPO_URL}">Claude Code skill</a>.</p>
   <p class="hint">Hover a tile for what it is and where the data came from; click for full size.</p>
 </header>
 <main>
 {chr(10).join(cards)}
 </main>
 <footer>
-  Every tile is produced by <code>docs/build_gallery.py</code> from public data, public CIFs or the synthetic
-  validation set — nothing is drawn by hand. <a href="{REPO_URL}">Repository</a> · MIT licence.
+  Every tile is produced by <code>docs/build_gallery.py</code> from public data and public CIFs — nothing is
+  drawn by hand and nothing is synthetic. <a href="{REPO_URL}">Repository</a> · MIT licence.
 </footer>
 </body>
 </html>
