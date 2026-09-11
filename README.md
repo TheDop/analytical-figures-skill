@@ -51,7 +51,7 @@ and `from scripts import spectra, calibration` as the template does.
 
 ## Validation
 
-`python -m pytest tests/` is one green gate for the whole skill (79 tests). It checks module
+`python -m pytest tests/` is one green gate for the whole skill (81 tests). It checks module
 imports, the `SKILL.md` structure, the `bundle.py` round-trip, p-value correction against
 `statsmodels`, the style presets and the CLI, and it bridges in three numeric-parity suites:
 
@@ -61,11 +61,13 @@ imports, the `SKILL.md` structure, the `bundle.py` round-trip, p-value correctio
 | `skill_validation/cocrystal/` | 26 | closed-form Rwp, `scipy.optimize.nnls`, the Cruz-Cabeza ΔpKa zones |
 | `skill_validation/pxrd/` | 23 | March–Dollase, Cu Kα₁/Kα₂ doublet, Caglioti, pseudo-Voigt |
 
-Two external datasets are fetched on demand rather than vendored (`skill_validation/chemometrics/datasets/fetch.py`);
-their checks skip cleanly when absent. The crystal family was additionally exercised on a CIF
-edge-case set (disorder, special positions, Z′ > 1, non-tabulated elements, deliberately broken
-inputs) and the FTIR integrator against published calibrations; see `references/crystal.md`
-and `references/verification.md`.
+| `skill_validation/ftir_integration/` | 14 | closed-form Gaussian areas and `scipy.integrate.quad` under sloping baselines, noise and band overlap; plus the integrator run against the published pectin-DM (Wang 2023) and BMC 2021 calibrations |
+| `skill_validation/crystal/` | 9 CIFs | a CIF edge-case set (disorder groups, special positions, Z′ = 9, chiral, multi-block, synthetic broken inputs): the engine's table, an independent gemmi-only second opinion, ADP U_eq, the Dans reflection list vs `pymatgen`. Needs `gemmi` + `Dans_Diffraction`; pytest skips it otherwise |
+
+External data is fetched on demand rather than vendored: the biospectools EMSC gold and the R
+`pls` gasoline set (`skill_validation/chemometrics/datasets/fetch.py`), the Mendeley pectin
+spectra, and the CCDC CIFs, which cannot be redistributed. Every check that needs one of them
+skips cleanly when it is absent.
 
 ## Provenance and licence
 

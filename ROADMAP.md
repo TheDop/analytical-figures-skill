@@ -278,7 +278,7 @@ The crystal family originally had no *identification/classification* tooling —
   `skill_validation/pxrd/` (23 checks). Doc: `crystal.md` calc-PXRD section. **Seam CLOSED (2026-07-04):**
   `crystal_pxrd.reflection_list` (Dans powder reflections — |F|²·multiplicity·LP) + `realistic_pattern`
   turn-key, validated end-to-end on real CIFs (aspirin, lactose) in
-  `test_realism_cif.py` (crystal validation set) (calc positions reproduced; Kα2 companion appears; render
+  `skill_validation/crystal/test_realism_cif.py` (calc positions reproduced; Kα2 companion appears; render
   eyeballed). Found + documented a coherence gotcha: the Kα2 default is Cu, so pin α1 to Cu (set
   `cfg.pxrd_wavelength`) when simulating a Cu scan from a Mo-refined CIF.
 - **CIF validation depth [fn]** — ADP sanity panel (non-positive-definite ellipsoids, Hirshfeld

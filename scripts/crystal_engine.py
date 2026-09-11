@@ -6,7 +6,7 @@ figure can never assert a contact the table doesn't list.
 
 Pure computation + Tier-1 gates (no plotting). gemmi is imported lazily (heavy dep; a
 non-CIF job never pulls it). Conventions/constants are pinned in the block below;
-the logic was validated against a CIF edge-case set (ELAINM, urea, aspirin, HMT,
+the logic was validated against the CIF edge-case set in skill_validation/crystal/ (ELAINM, urea, aspirin, HMT,
 ferrocene, flufenamic, lactose, L-alanine, PTU-ellagic + synthetic broken-input CIFs).
 
     load(cfg)                 parse + block-select + symmetry + atoms (robust to CSD/SHELX quirks)

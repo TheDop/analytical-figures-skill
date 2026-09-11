@@ -205,7 +205,7 @@ The figure documents its own viewpoint and provenance. Include:
   *shapes/positions* line up; for pure phase-ID (positions only) the plain `calc_pattern` is enough.
   **Coherence gotcha:** the Kα2 default is *Cu* — to simulate a Cu scan from a Mo-refined CIF set
   `cfg.pxrd_wavelength=1.540598` (so α1 is Cu too). Validated on real CIFs (aspirin, lactose)
-  in the crystal validation set (`test_realism_cif.py`).
+  in `skill_validation/crystal/test_realism_cif.py`.
 
 ## Sources
 

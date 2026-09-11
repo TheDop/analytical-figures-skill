@@ -6,3 +6,10 @@ out/
 # validation data fetched on demand (no redistribution licence) — see THIRD_PARTY_NOTICES.md
 skill_validation/chemometrics/datasets/emsc_testdata.xlsx
 skill_validation/chemometrics/datasets/gasoline.npz
+# CCDC CIFs are not redistributable: fetched by the user, never committed (see skill_validation/crystal/README.md)
+skill_validation/crystal/cifs/783049.cif
+skill_validation/crystal/cifs/1178952.cif
+skill_validation/crystal/cifs/*CCDC*.cif
+skill_validation/crystal/cifs/*ELAINM*.cif
+# Mendeley pectin raw spectra (81 MB, CC BY 4.0): fetched by DOI, not vendored
+skill_validation/ftir_integration/pectin_mendeley/

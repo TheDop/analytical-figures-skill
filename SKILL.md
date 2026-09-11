@@ -405,6 +405,11 @@ over "candidate calibrations" over "figures of merit") goes beyond one flat grid
   (ΔpKa zones + NNLS sum-of-parents/Rwp, 26 checks), bridged into `pytest tests/`.
 - `skill_validation/pxrd/` — the numeric-parity validation suite for PXRD realism (23 checks:
   March-Dollase, Kα₂ doublet, Caglioti, pseudo-Voigt, `simulate_pattern`), bridged into `pytest tests/`.
+- `skill_validation/crystal/` — the CIF edge-case set (COD CIFs + synthetic broken inputs; CCDC extras
+  optional) with the engine / independent-gate / ADP / realism checks (`run.py`; needs gemmi +
+  Dans_Diffraction, pytest skips it otherwise) and `crystal_demo.py`, the worked example.
+- `skill_validation/ftir_integration/` — the band integrator against published calibrations (pectin
+  DM, BMC 2021) plus a deterministic closed-form ground-truth test (14 checks, bridged into `pytest tests/`).
 - `references/` — `figure_selection.md` (the "what to plot" decision layer — start here),
   `cocrystal_id.md` (the "which evidence identifies a cocrystal" decision layer — start here
   for cocrystal ID), `databases.md` (where to source each external fact — open first,
