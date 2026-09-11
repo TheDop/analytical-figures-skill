@@ -24,6 +24,7 @@ cfg = Config(
     output_dir=os.path.join(HERE, "out"),
     journal="nature", column="double", formats=("pdf", "png"),
     domain="ftir",
+    baseline=None,                            # raw traces: no global correction — the local shared baseline does the work
     integration_baseline="shared",            # the two bands overlap on one pedestal: ONE baseline, split at 1700
     integration_windows=[(1500.0, 1700.0, "carboxylate"), (1700.0, 1800.0, "ester")],
     conf_level=0.95, lod_loq_method="residual_sd",

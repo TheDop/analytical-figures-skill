@@ -147,7 +147,9 @@ def write_readme(examples):
             f'<p><sub>WHAT YOU GET</sub><br>\n'
             f'<a href="{rel}/{ex["id"]}_standalone.py">one self-contained script</a> · '
             f'<a href="{rel}/{ex["figures"][0][1]}">the figure</a> · '
-            f'<a href="{rel}/caption.txt">its caption</a></p>\n'
+            f'<a href="{rel}/caption.txt">its caption</a>'
+            + (f' · <a href="{rel}/methods.txt">paste-ready methods text</a>' if os.path.exists(os.path.join(d, "methods.txt")) else '')
+            + '</p>\n'
             f'<details><summary>full log</summary>\n<pre>{html.escape(_trim_log(log))}</pre></details>\n'
             f'</td>\n<td width="54%" valign="top">{figs}</td>\n</tr>')
     section = (

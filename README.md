@@ -138,7 +138,7 @@ anels labelled)
 · one shared baseline for the two overlapping bands, split at 1700 cm⁻¹<br>
 · and it says when a method is weak: <code>p=0.001 -&gt; constant bias: intercept significantly != 0 (CI excludes 0)</code></p>
 <p><sub>WHAT YOU GET</sub><br>
-<a href="docs/examples/pectin_calibration/pectin_calibration_standalone.py">one self-contained script</a> · <a href="docs/examples/pectin_calibration/figure.png">the figure</a> · <a href="docs/examples/pectin_calibration/caption.txt">its caption</a></p>
+<a href="docs/examples/pectin_calibration/pectin_calibration_standalone.py">one self-contained script</a> · <a href="docs/examples/pectin_calibration/figure.png">the figure</a> · <a href="docs/examples/pectin_calibration/caption.txt">its caption</a> · <a href="docs/examples/pectin_calibration/methods.txt">paste-ready methods text</a></p>
 <details><summary>full log</summary>
 <pre>$ python analysis.py
   [INFO] ingest: DM3.csv: 108345 B
