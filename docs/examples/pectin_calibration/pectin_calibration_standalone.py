@@ -157,6 +157,7 @@ class Config:
     outlier_mad_n: float = 3.5           # MAD multiplier for flag_outliers_mad
     tick_overlap_tol_px: float = 2.0     # audit_layout flags tick labels closer than this
     clip_tol_px: float = 2.0             # audit_layout flags non-tick text past the canvas edge by this
+    escape_tol_frac: float = 0.01        # audit_layout flags data running past the y-limits by more than this fraction of the range
     strict: bool = True                  # True => any FAIL gate raises; False => warns only
 
     # ---------------------------------------------------------------- crystallography (CIF)
@@ -308,8 +309,11 @@ def apply_style(cfg):
     """Install the house  Call once before plotting."""
     # Prefer scienceplots' no-latex style; fall back to the hand-rolled preset.
     try:
-        import scienceplots  # noqa: F401
-        plt.style.use(["science", "no-latex"])
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")          # scienceplots' own deprecation chatter
+            import scienceplots  # noqa: F401
+            plt.style.use(["science", "no-latex"])
     except Exception:
         plt.rcParams.update(_BASE_RC)
     plt.rcParams.update(_main_rc(cfg))
@@ -682,8 +686,9 @@ def check_trace(x, y, cfg, name="trace", min_points=8, require_monotonic=True):
         dx = np.diff(x)
         if not (np.all(dx > 0) or np.all(dx < 0)):
             f.append(("FAIL", "x axis is not monotonic (concatenation/parse error?)"))
-    # crude noise/spike check: a single sample dominating the dynamic range
-    if y.size and np.ptp(y) > 0:
+    # crude noise/spike check: a single sample dominating the dynamic range. An FTIR rule -
+    # sharp Bragg peaks would trip it, so the pxrd domain keeps the structural checks only.
+    if y.size and np.ptp(y) > 0 and getattr(cfg, "domain", "ftir") != "pxrd":
         spikes = np.abs(np.diff(y, 2))
         if spikes.size and spikes.max() > 0.5 * np.ptp(y):
             f.append(("WARN", "large single-sample spike - check for a dead pixel/cosmic ray"))
@@ -741,8 +746,10 @@ def summarize(values, cfg):
         from scipy import stats
         t = float(stats.t.ppf(0.5 + p / 2, df=n - 1)) if n > 1 else float("nan")
     except Exception:
-        # normal-approx fallback if scipy absent
-        z = {0.90: 1.645, 0.95: 1.960, 0.99: 2.576}.get(round(p, 2), 1.960)
+        from statistics import NormalDist              # scipy absent: exact z, and say so
+        z = float(NormalDist().inv_cdf(0.5 + p / 2))
+        print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
+              f"t at n-1={n - 1} dof (CI too narrow at small n)")
         t = z if n > 1 else float("nan")
     ci = t * sem if n > 1 else float("nan")
     caption = (f"mean ± {int(p*100)}% CI (t={t:.3f}·SEM), n={n}"
@@ -1461,7 +1468,9 @@ def correct_baseline(x, y, cfg):
     if method == "arpls":
         try:
             b = _arpls(np.asarray(y, float), lam=cfg.arpls_lam)
-        except Exception:
+        except Exception as e:
+            print(f"  [WARN] baseline: arPLS failed ({type(e).__name__}: {e}) - this trace fell back to "
+                  f"rubberband; cfg.baseline no longer describes what ran for it")
             b = _rubberband(np.asarray(x, float), np.asarray(y, float))
     elif method == "rubberband":
         b = _rubberband(np.asarray(x, float), np.asarray(y, float))
@@ -1524,7 +1533,9 @@ def _sg(y, smooth, deriv=0, delta=1.0):
         if w <= poly:
             raise ValueError
         return savgol_filter(y, w, poly, deriv=deriv, delta=delta)
-    except Exception:
+    except Exception as e:
+        print(f"  [WARN] smooth: Savitzky-Golay unavailable or window unworkable ({type(e).__name__}) - "
+              f"{'raw trace' if deriv == 0 else 'finite-difference derivative'} used instead")
         if deriv == 0:
             return y
         d = y
@@ -1828,7 +1839,11 @@ def _tmult(df, conf):
         from scipy import stats
         return float(stats.t.ppf(0.5 + conf / 2, df))
     except Exception:
-        return {0.90: 1.645, 0.95: 1.960, 0.99: 2.576}.get(round(conf, 2), 1.960)
+        from statistics import NormalDist              # scipy absent: exact z, and say so
+        z = float(NormalDist().inv_cdf(0.5 + conf / 2))
+        print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
+              f"t at {df} dof (bands too narrow at small n)")
+        return z
 
 
 def fit(x, y, cfg):
@@ -4144,9 +4159,9 @@ def realistic_pattern(struct, cfg, x_grid=None, npoints=3000):
 
 def plot(struct, cfg, experimental=None, pattern=None):
     """Plot the calculated pattern through the house pxrd conventions (normal 2theta axis,
-    intensity). `experimental`=(2theta, I) overlays a measured trace for phase ID. We don't
-    run check_trace here — the data is our own validated calc, not an ingest, and its
-    sharp Bragg peaks would trip the FTIR dead-pixel spike heuristic."""
+    intensity). `experimental`=(2theta, I) overlays a measured trace for phase ID; that trace is
+    an ingest and is gated with check_trace (pxrd domain: structural checks, no FTIR
+    spike heuristic). The calculated pattern is our own validated computation, not an ingest."""
     if pattern is None:
         pattern = calc_pattern(struct, cfg)
     pcfg = replace(cfg, domain="pxrd")
@@ -4155,6 +4170,7 @@ def plot(struct, cfg, experimental=None, pattern=None):
     ax.plot(pattern["two_theta"], pattern["intensity"], label="calculated")
     if experimental is not None:
         ex, ey = np.asarray(experimental[0], float), np.asarray(experimental[1], float)
+        check_trace(ex, ey, pcfg, name="experimental")
         if ey.size and ey.max() > 0:
             ey = ey / ey.max() * 100.0
         ax.plot(ex, ey, label="experimental")
@@ -5230,6 +5246,14 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
     ratio = _pick(cfg, "pxrd_kalpha2_ratio", CU_KA2_RATIO, ratio)
     po_hkl = _pick(cfg, "pxrd_po_axis", None, po_hkl)
     march_r = _pick(cfg, "pxrd_march_r", 1.0, march_r)
+    if cfg is not None and lam1 == CU_KA1 and getattr(cfg, "pxrd_wavelength", None):
+        lam1 = float(cfg.pxrd_wavelength)           # the α1 the reflection list was computed at
+    if kalpha2 and abs(lam1 - CU_KA1) > 1e-3 and lam2 == CU_KA2:
+        print(f"  [WARN] pxrd_realism: Kα2 doublet uses the Cu Kα2 line ({CU_KA2} Å) on an α1 of {lam1} Å - "
+              f"set pxrd_wavelength2 for a non-Cu anode, or pin pxrd_wavelength to Cu")
+    if po_hkl is not None and march_r != 1.0 and Gs is None:
+        print("  [WARN] pxrd_realism: preferred orientation requested (pxrd_po_axis) but no reciprocal "
+              "metric Gs was given - March-Dollase NOT applied")
 
     refl = list(reflections)
     if po_hkl is not None and march_r != 1.0 and Gs is not None:
@@ -5325,10 +5349,20 @@ def classify_ionisation(pka_acid, pka_base_conjugate,
 # indexing / FTIR (cocrystal_id.md) / SCXRD.
 
 
-def rwp(y_obs, y_calc, weight="poisson", eps=1e-12):
+def _resolve_weight(yo, weight):
+    """'auto' → 'poisson' only when every y_obs > 0 (counts-like data with a background);
+    a background-subtracted or normalised profile with true zeros gets 'unit' - under Poisson
+    weights one zero would weigh 1/eps and the Rwp would be meaningless."""
+    if weight == "auto":
+        return "poisson" if (yo.size and float(np.min(yo)) > 0) else "unit"
+    return weight
+
+
+def rwp(y_obs, y_calc, weight="auto", eps=1e-12):
     """Weighted profile residual (Rietveld goodness-of-fit):
         Rwp = sqrt( Σ w_i (y_obs_i − y_calc_i)² / Σ w_i y_obs_i² )
     Returns the FRACTION (0 = perfect; ×100 for %). weight:
+      'auto'    → (default) 'poisson' when every y_obs > 0, else 'unit' (see _resolve_weight).
       'poisson' → w_i = 1/max(y_obs_i, eps) — counting statistics, the crystallographic default
                   (assumes counts-like data with a non-zero background; on a normalised pattern
                   with true zeros prefer 'unit').
@@ -5337,19 +5371,20 @@ def rwp(y_obs, y_calc, weight="poisson", eps=1e-12):
     diagnostic on top of it."""
     yo = np.asarray(y_obs, float).ravel()
     yc = np.asarray(y_calc, float).ravel()
+    weight = _resolve_weight(yo, weight)
     if weight == "unit":
         w = np.ones_like(yo)
     elif weight == "poisson":
         w = 1.0 / np.maximum(yo, eps)
     else:
-        raise ValueError("weight must be 'poisson' or 'unit'")
+        raise ValueError("weight must be 'auto', 'poisson' or 'unit'")
     den = float(np.sum(w * yo ** 2))
     if den <= 0:
         return float("nan")
     return float(np.sqrt(np.sum(w * (yo - yc) ** 2) / den))
 
 
-def sum_of_parents(y_obs, parents, weight="poisson", eps=1e-12):
+def sum_of_parents(y_obs, parents, weight="auto", eps=1e-12):
     """Fit an observed pattern as a NON-NEGATIVE linear combination of the parent patterns
     (NNLS) — the physical-mixture model. A true mixture reconstructs well (low Rwp, no
     systematic unexplained peaks); a genuine new phase does NOT (the parents can't build its
@@ -5376,6 +5411,7 @@ def sum_of_parents(y_obs, parents, weight="poisson", eps=1e-12):
     resid = y - y_calc
     total = float(coef.sum())
     frac = coef / total if total > 0 else np.full_like(coef, np.nan)
+    weight = _resolve_weight(np.asarray(y, float).ravel(), weight)   # record the weighting actually used
     rw = rwp(y, y_calc, weight=weight, eps=eps)
     caption = (f"NNLS sum-of-parents: {coef.size} parents, relative scale "
                f"{np.array2string(frac, precision=3)} (NOT quantitative phase % — no RIR); "
@@ -5403,7 +5439,7 @@ def unexplained_peaks(x, residual, reference=None, kind="new", rel_height=0.05, 
     return peaks
 
 
-def phase_report(x, y_obs, parents, weight="poisson", peak_rel_height=0.05):
+def phase_report(x, y_obs, parents, weight="auto", peak_rel_height=0.05):
     """Turn-key new-phase-vs-physical-mixture report: NNLS sum-of-parents fit + Rwp + the
     new/lost unexplained-peak lists + a HEURISTIC verdict. The verdict is a detection (are
     there unexplained peaks above `peak_rel_height`?), not a magic Rwp cutoff — read it WITH
