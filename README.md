@@ -21,8 +21,8 @@ It is not a plotting tutorial. It does two things a plotting library does not:
 Clone into a Claude Code skills directory, user-level or per project:
 
 ```
-git clone <repo-url> ~/.claude/skills/analytical-figures        # available in every project
-git clone <repo-url> .claude/skills/analytical-figures           # this project only
+git clone https://github.com/TheDop/analytical-figures-skill ~/.claude/skills/analytical-figures        # available in every project
+git clone https://github.com/TheDop/analytical-figures-skill .claude/skills/analytical-figures           # this project only
 python -m pip install -r ~/.claude/skills/analytical-figures/requirements.txt
 ```
 
