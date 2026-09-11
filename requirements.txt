@@ -1,0 +1,14 @@
+# required
+numpy>=1.24
+matplotlib>=3.7
+
+# optional (skill degrades gracefully if absent)
+scipy>=1.10          # exact t-multipliers + arPLS solve; without it falls back to z / rubberband
+pybaselines>=1.0     # alternative arPLS baseline; without it uses the built-in solver/rubberband
+scienceplots>=2.1    # journal styling; without it uses the built-in preset
+
+# per-family, lazy (imported ONLY when that family runs; not needed otherwise — no graceful
+# fallback, but a clear pip-install error if missing). The base families never import these.
+scikit-learn>=1.2    # chemometrics family (PLS / PCR / PCA)
+rdkit>=2023.3        # cocrystal predictor (molecule descriptors / synthon SMARTS); lazy — only predict_cocrystal & friends need it
+# crystal family: gemmi, Dans-Diffraction (+ optional pymatgen, pyvista) — see references/crystal.md

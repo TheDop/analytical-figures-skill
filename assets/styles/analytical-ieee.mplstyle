@@ -1,0 +1,25 @@
+# analytical-figures house style (auto-exported by style.export_mplstyle;
+# no skill import needed -- plt.style.use(this_file)).
+axes.linewidth: 0.6
+xtick.direction: in
+ytick.direction: in
+xtick.major.width: 0.6
+ytick.major.width: 0.6
+legend.frameon: False
+figure.autolayout: False
+font.size: 9.0
+axes.titlesize: 9.0
+axes.labelsize: 9.0
+xtick.labelsize: 8.0
+ytick.labelsize: 8.0
+legend.fontsize: 8.0
+font.family: sans-serif
+axes.prop_cycle: cycler('color', ['000000', 'E69F00', '56B4E9', '009E73', 'F0E442', '0072B2', 'D55E00', 'CC79A7']) + cycler('linestyle', ['-', '--', '-.', ':', '-', '--', '-.', ':'])
+savefig.bbox: tight
+savefig.pad_inches: 0.02
+pdf.fonttype: 42
+ps.fonttype: 42
+svg.fonttype: none
+lines.linewidth: 1.0
+lines.markersize: 3.5
+figure.figsize: 3.5, 2.52
