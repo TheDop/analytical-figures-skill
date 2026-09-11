@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>analytical-figures — gallery</title>
+<meta property="og:title" content="analytical-figures">
+<meta property="og:description" content="Publication-grade figures and the gated analysis behind them, for analytical chemistry.">
+<meta property="og:image" content="https://thedop.github.io/analytical-figures-skill/gallery/social.png">
+<style>
+:root{--bg:#f3f4f6;--card:#fff;--ink:#1b1f24;--muted:#57606a;--accent:#0b5fff}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header,footer,main{max-width:1240px;margin:0 auto;padding:0 20px}
+header{padding-top:44px}
+h1{font-size:2.1rem;margin:0;letter-spacing:-.01em}
+.tag{color:var(--muted);margin:.3rem 0 0;max-width:60ch}
+.hint{color:var(--muted);font-size:.9rem;margin:.6rem 0 0}
+main{padding:22px 20px 8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}
+.tile{position:relative;display:block;background:var(--card);border-radius:10px;overflow:hidden;aspect-ratio:1;
+  box-shadow:0 1px 3px rgba(0,0,0,.08);transition:transform .15s ease,box-shadow .15s ease;color:inherit;text-decoration:none}
+.tile img{width:100%;height:100%;object-fit:contain;display:block}
+.tile:hover,.tile:focus-visible{transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.16);outline:none}
+.placard{position:absolute;left:0;right:0;bottom:0;background:rgba(255,255,255,.97);border-top:3px solid var(--accent);
+  padding:10px 12px 12px;transform:translateY(102%);transition:transform .18s ease;font-size:.84rem;line-height:1.35}
+.tile:hover .placard,.tile:focus-visible .placard{transform:none}
+.placard b{display:block;margin-bottom:4px}
+.placard .src,.placard .scr{display:block;color:var(--muted);font-size:.76rem;margin-top:2px}
+.placard code{font-size:.72rem;background:#eef0f3;padding:1px 4px;border-radius:4px}
+@media (hover:none){.placard{position:static;transform:none}.tile{aspect-ratio:auto}.tile img{aspect-ratio:1}}
+footer{padding:16px 20px 40px;color:var(--muted);font-size:.86rem}
+footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>analytical-figures</h1>
+  <p class="tag">Publication-grade figures and the gated analysis behind them, for analytical chemistry. A <a href="https://github.com/TheDop/analytical-figures-skill">Claude Code skill</a>.</p>
+  <p class="hint">Hover a tile for what it is and where the data came from; click for full size.</p>
+</header>
+<main>
+<a class="tile" href="gallery/full/calib_pectin.png"><img src="gallery/tiles/calib_pectin.png" alt="Calibration with confidence and prediction bands and the mandatory residual panel" loading="lazy"><div class="placard"><b>Calibration with confidence and prediction bands and the mandatory residual panel</b><span class="src">Data: Pectin degree of methyl-esterification by FTIR — Wang 2023, Mendeley Data 10.17632/gkwbp3wc49.1 (CC BY 4.0)</span><span class="scr">Made by <code>skill_validation/ftir_integration/validate_ftir_integration.py</code></span></div></a>
+<a class="tile" href="gallery/full/waterfall.png"><img src="gallery/tiles/waterfall.png" alt="Replicate waterfall: reps overlaid per level, levels offset, right-margin keys instead of a legend" loading="lazy"><div class="placard"><b>Replicate waterfall: reps overlaid per level, levels offset, right-margin keys instead of a legend</b><span class="src">Data: Synthetic binary mixture, 6 levels × 3 reps with multiplicative loading variation (skill_validation/chemometrics/_data.py)</span><span class="scr">Made by <code>docs/build_gallery.py → scripts/spectra.plot_waterfall</code></span></div></a>
+<a class="tile" href="gallery/full/pls_diag.png"><img src="gallery/tiles/pls_diag.png" alt="Leakage-safe PLS diagnostics: RMSECV per preprocessing with the parsimony pick, coefficients, scores, loadings" loading="lazy"><div class="placard"><b>Leakage-safe PLS diagnostics: RMSECV per preprocessing with the parsimony pick, coefficients, scores, loadings</b><span class="src">Data: Synthetic binary mixture (skill_validation/chemometrics/_data.py), leave-one-level-out CV</span><span class="scr">Made by <code>docs/build_gallery.py → scripts/chemometrics.diagnostics_figure</code></span></div></a>
+<a class="tile" href="gallery/full/pxrd_overlay.png"><img src="gallery/tiles/pxrd_overlay.png" alt="Stacked calculated PXRD patterns for phase discrimination" loading="lazy"><div class="placard"><b>Stacked calculated PXRD patterns for phase discrimination</b><span class="src">Data: Aspirin COD 7247819, urea COD 1008785, lactose COD 2206486 — Crystallography Open Database</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/ortep.png"><img src="gallery/tiles/ortep.png" alt="ORTEP displacement ellipsoids at 50 % probability, deterministic PCA camera" loading="lazy"><div class="placard"><b>ORTEP displacement ellipsoids at 50 % probability, deterministic PCA camera</b><span class="src">Data: Aspirin, COD 7247819 (296 K)</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/ddsimca.png"><img src="gallery/tiles/ddsimca.png" alt="DD-SIMCA acceptance plot: regular / extreme / outlier, with the chi-squared boundary" loading="lazy"><div class="placard"><b>DD-SIMCA acceptance plot: regular / extreme / outlier, with the chi-squared boundary</b><span class="src">Data: Synthetic binary mixture plus one under-loaded and one baseline-tilted replicate injected</span><span class="scr">Made by <code>docs/build_gallery.py → scripts/chemometrics.diagnostics + plot_influence</code></span></div></a>
+<a class="tile" href="gallery/full/integration.png"><img src="gallery/tiles/integration.png" alt="Band area on algorithmic anchors: the flanking minima found once and locked for the whole batch" loading="lazy"><div class="placard"><b>Band area on algorithmic anchors: the flanking minima found once and locked for the whole batch</b><span class="src">Data: Synthetic binary mixture (skill_validation/chemometrics/_data.py)</span><span class="scr">Made by <code>docs/build_gallery.py → scripts/spectra.find_anchors</code></span></div></a>
+<a class="tile" href="gallery/full/calib_bmc.png"><img src="gallery/tiles/calib_bmc.png" alt="Doxorubicin carbonyl-area calibration; LOD/LOQ from the residual SD, and the sigma is named" loading="lazy"><div class="placard"><b>Doxorubicin carbonyl-area calibration; LOD/LOQ from the residual SD, and the sigma is named</b><span class="src">Data: Bansal, Singh &amp; Kaur 2021, BMC Chemistry 15:27, 10.1186/s13065-021-00752-3 (published area table)</span><span class="scr">Made by <code>skill_validation/ftir_integration/validate_ftir_integration.py</code></span></div></a>
+<a class="tile" href="gallery/full/groundtruth.png"><img src="gallery/tiles/groundtruth.png" alt="Shared vs per-window baseline against a closed-form answer: the per-window pedestal bias, measured" loading="lazy"><div class="placard"><b>Shared vs per-window baseline against a closed-form answer: the per-window pedestal bias, measured</b><span class="src">Data: Analytic Gaussian bands with known areas, checked against scipy.integrate.quad</span><span class="scr">Made by <code>skill_validation/ftir_integration/groundtruth_integration_test.py</code></span></div></a>
+<a class="tile" href="gallery/full/pxrd_calc.png"><img src="gallery/tiles/pxrd_calc.png" alt="Calculated PXRD from a CIF at Cu Kα, top peak cross-checked against pymatgen" loading="lazy"><div class="placard"><b>Calculated PXRD from a CIF at Cu Kα, top peak cross-checked against pymatgen</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/pxrd_realism.png"><img src="gallery/tiles/pxrd_realism.png" alt="Lab-realistic pattern: Cu Kα₁/Kα₂ doublet and Caglioti broadening on the Dans reflection list" loading="lazy"><div class="placard"><b>Lab-realistic pattern: Cu Kα₁/Kα₂ doublet and Caglioti broadening on the Dans reflection list</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/test_realism_cif.py</code></span></div></a>
+<a class="tile" href="gallery/full/packing.png"><img src="gallery/tiles/packing.png" alt="Packing diagram down a with hydrogen bonds and the cell box" loading="lazy"><div class="placard"><b>Packing diagram down a with hydrogen bonds and the cell box</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/hbond_env.png"><img src="gallery/tiles/hbond_env.png" alt="Hydrogen-bond environment of the asymmetric unit, symmetry mates superscripted" loading="lazy"><div class="placard"><b>Hydrogen-bond environment of the asymmetric unit, symmetry mates superscripted</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/unit_cell.png"><img src="gallery/tiles/unit_cell.png" alt="Unit-cell contents with the cell box and a/b/c" loading="lazy"><div class="placard"><b>Unit-cell contents with the cell box and a/b/c</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/flufenamic.png"><img src="gallery/tiles/flufenamic.png" alt="Z′ = 3 with CF₃ disorder groups honoured: no bonds between mutually exclusive sites" loading="lazy"><div class="placard"><b>Z′ = 3 with CF₃ disorder groups honoured: no bonds between mutually exclusive sites</b><span class="src">Data: Flufenamic acid, COD 4118081</span><span class="scr">Made by <code>skill_validation/crystal/test_ellipsoid.py</code></span></div></a>
+<a class="tile" href="gallery/full/pxrd_urea.png"><img src="gallery/tiles/pxrd_urea.png" alt="Calculated PXRD of a molecule on a special position: multiplicity handled in the expansion" loading="lazy"><div class="placard"><b>Calculated PXRD of a molecule on a special position: multiplicity handled in the expansion</b><span class="src">Data: Urea, COD 1008785</span><span class="scr">Made by <code>skill_validation/crystal/test_pxrd.py</code></span></div></a>
+<a class="tile" href="gallery/full/ballstick.png"><img src="gallery/tiles/ballstick.png" alt="Ball-and-stick, PCA face-on, C–H hidden, heteroatoms labelled" loading="lazy"><div class="placard"><b>Ball-and-stick, PCA face-on, C–H hidden, heteroatoms labelled</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/crystal_demo.py</code></span></div></a>
+<a class="tile" href="gallery/full/pyvista.png"><img src="gallery/tiles/pyvista.png" alt="PyVista/VTK still: real depth buffer, ambient occlusion, orthographic camera from the same orientation engine" loading="lazy"><div class="placard"><b>PyVista/VTK still: real depth buffer, ambient occlusion, orthographic camera from the same orientation engine</b><span class="src">Data: Aspirin, COD 7247819</span><span class="scr">Made by <code>skill_validation/crystal/test_pyvista.py</code></span></div></a>
+</main>
+<footer>
+  Every tile is produced by <code>docs/build_gallery.py</code> from public data, public CIFs or the synthetic
+  validation set — nothing is drawn by hand. <a href="https://github.com/TheDop/analytical-figures-skill">Repository</a> · MIT licence.
+</footer>
+</body>
+</html>
