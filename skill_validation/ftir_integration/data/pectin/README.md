@@ -5,7 +5,8 @@ doi:[10.17632/gkwbp3wc49.1](https://doi.org/10.17632/gkwbp3wc49.1). Licence: Cre
 Attribution 4.0 International.
 
 **What is here:** the 24 raw-spectrum CSVs from the record (two columns: wavenumber / cm⁻¹,
-absorbance; 3736 points, 400–4000 cm⁻¹), content unchanged, file names normalised:
+absorbance; 3736 points, 400–4000 cm⁻¹), numeric content unchanged, file names normalised
+(line endings are normalised to LF by the repository's `.gitattributes`):
 
 - `calibration/DM<x>.csv` — the six calibration standards of known degree of
   methyl-esterification (DM 3, 20, 37, 55, 62.8, 70.5 %).
