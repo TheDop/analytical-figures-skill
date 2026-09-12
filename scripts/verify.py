@@ -71,12 +71,26 @@ def check_trace(x, y, cfg, name="trace", min_points=8, require_monotonic=True):
         dx = np.diff(x)
         if not (np.all(dx > 0) or np.all(dx < 0)):
             f.append(("FAIL", "x axis is not monotonic (concatenation/parse error?)"))
-    # crude noise/spike check: a single sample dominating the dynamic range. An FTIR rule -
-    # sharp Bragg peaks would trip it, so the pxrd domain keeps the structural checks only.
-    if y.size and np.ptp(y) > 0 and getattr(cfg, "domain", "ftir") != "pxrd":
-        spikes = np.abs(np.diff(y, 2))
-        if spikes.size and spikes.max() > 0.5 * np.ptp(y):
-            f.append(("WARN", "large single-sample spike - check for a dead pixel/cosmic ray"))
+    # isolated single-sample spike (dead pixel / cosmic ray / zinger). For every sample, the local
+    # baseline is the median of the outer ring (i-4..i-2, i+2..i+4) and the local noise its MAD.
+    # A spike stands far above (or below) that baseline while BOTH neighbours stay within 25 %
+    # of its excursion; a real band or Bragg peak >= ~1.3 samples wide lifts at least one
+    # neighbour further than that. Domain-independent (the old second-difference rule
+    # false-alarmed on a sharp FTIR band and was switched off for PXRD, where zingers occur).
+    if y.size >= 9 and np.ptp(y) > 0:
+        from numpy.lib.stride_tricks import sliding_window_view
+        W = sliding_window_view(y, 9)
+        ring = np.concatenate([W[:, 0:3], W[:, 6:9]], axis=1)
+        base = np.median(ring, axis=1)
+        noise = 1.4826 * np.median(np.abs(ring - base[:, None]), axis=1) + 1e-12
+        centre, nb_hi, nb_lo = W[:, 4], np.maximum(W[:, 3], W[:, 5]), np.minimum(W[:, 3], W[:, 5])
+        floor = 0.1 * np.ptp(y)
+        up, dn = centre - base, base - centre
+        spike = (((up > floor) & (up > 8 * noise) & (nb_hi - base < 0.25 * up))
+                 | ((dn > floor) & (dn > 8 * noise) & (base - nb_lo < 0.25 * dn)))
+        if spike.any():
+            f.append(("WARN", f"isolated single-sample spike at {int(np.argmax(spike)) + 4} - "
+                              f"check for a dead pixel/cosmic ray"))
     if not f:
         f.append(("INFO", f"{x.size} pts, monotonic, finite - OK"))
     return _resolve(f, cfg, name)
@@ -116,6 +130,9 @@ def same_processing(records, cfg):
     return _resolve(f, cfg, "batch")
 
 
+_VER_NO_SCIPY_WARNED = False
+
+
 def summarize(values, cfg):
     """Honest stats for an error bar. Returns a dict AND a caption string that
     NAMES the statistic, n, and (for CI) the t-multiplier. Never present an
@@ -131,10 +148,13 @@ def summarize(values, cfg):
         from scipy import stats
         t = float(stats.t.ppf(0.5 + p / 2, df=n - 1)) if n > 1 else float("nan")
     except Exception:
-        from statistics import NormalDist              # scipy absent: exact z, and say so
-        z = float(NormalDist().inv_cdf(0.5 + p / 2))
-        print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
-              f"t at n-1={n - 1} dof (CI too narrow at small n)")
+        from statistics import NormalDist              # scipy absent: exact z, and say so (once)
+        z = float(NormalDist().inv_cdf(min(max(0.5 + p / 2, 1e-12), 1 - 1e-12)))
+        global _VER_NO_SCIPY_WARNED
+        if not _VER_NO_SCIPY_WARNED:
+            _VER_NO_SCIPY_WARNED = True
+            print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
+                  f"t at n-1={n - 1} dof (CI too narrow at small n); further calls stay silent")
         t = z if n > 1 else float("nan")
     ci = t * sem if n > 1 else float("nan")
     caption = (f"mean ± {int(p*100)}% CI (t={t:.3f}·SEM), n={n}"
@@ -519,7 +539,12 @@ def audit_layout(fig, cfg=None):
             ticks = [t.get_text() for t in axis.get_ticklabels()]
             has_numeric = any(any(ch.isdigit() for ch in t) for t in ticks)
             lab = getlab().strip()
-            if has_numeric and lab and not any(c in lab.lower() for c in _UNIT_CUES):
+            import re as _re
+            low = lab.lower()
+            def _cued(c):                       # word-aware for plain words ('ratio' must not match 'concentRATIOn')
+                return (_re.search(r"(?<![a-z])" + _re.escape(c) + r"(?![a-z])", low) is not None
+                        if c.isalpha() else c in low)
+            if has_numeric and lab and not any(_cued(c) for c in _UNIT_CUES):
                 f.append(("WARN", f"axis '{lab}' has numeric ticks but no unit cue "
                                   f"(add a unit, or mark dimensionless/a.u./ratio)"))
     # off-canvas clipping of NON-tick text (title, axis labels, annotations, panel

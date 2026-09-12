@@ -185,7 +185,7 @@ The figure documents its own viewpoint and provenance. Include:
   zero-point or unit-cell/temperature effect, not a phase mismatch — flag, don't hand-shift.
 - The (000) beam is removed before broadening (engine handles it). Calc PXRD is a *source*,
   not a new plotting family — house spectra conventions otherwise apply.
-- **Cocrystal ID = stack the phases.** `crystal_pxrd.plot_overlay([(label, cif), …], cfg,
+- **Cocrystal ID = stack the phases.** `crystal_pxrd.plot_overlay_patterns([(label, cif), …], cfg,
   experimental=…)` waterfalls calc(cocrystal) vs calc(API) vs calc(coformer) (+ the measured
   pattern, drawn at the bottom) so a genuine new cocrystal phase reads as *distinct* from a
   physical mix of its starting materials. Label each trace at the right edge; state λ in the

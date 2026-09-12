@@ -114,7 +114,7 @@ def normalize(x, y, cfg):
         m = np.max(np.abs(y))
         return y / m if m else y
     if cfg.normalize == "area":
-        a = _trapz(np.abs(y), x)
+        a = abs(_trapz(np.abs(y), x))                 # a descending axis must not flip the sign
         return y / a if a else y
     raise ValueError(f"unknown normalize '{cfg.normalize}'")
 
@@ -338,6 +338,9 @@ def integrate_bands(x, y, cfg):
           up and carve area off the smaller band.
     """
     x = np.asarray(x, float); y = np.asarray(y, float)
+    o = np.argsort(x, kind="stable")                 # a descending export (raw .spc: 4000 -> 650) would
+    x, y = x[o], y[o]                                # flip the trapezoid sign and break np.interp
+    half = 2.0 if getattr(cfg, "domain", "ftir") == "ftir" else 0.0   # anchor averaging window (x units)
     windows = cfg.integration_windows
     mode = getattr(cfg, "integration_baseline", "per_window")
 
@@ -348,8 +351,7 @@ def integrate_bands(x, y, cfg):
         env_hi = max(max(lo, hi) for lo, hi, _ in windows)
         em = (x >= env_lo) & (x <= env_hi)
         if em.sum() >= 2:
-            xe = x[em]
-            env = (env_lo, env_hi, y[em][0], y[em][-1])   # baseline through the envelope edges
+            env = (env_lo, env_hi, _anchor_val(x, y, env_lo, half), _anchor_val(x, y, env_hi, half))
     elif mode not in ("per_window", "shared"):
         raise ValueError(f"unknown integration_baseline '{mode}'")
 
@@ -365,7 +367,7 @@ def integrate_bands(x, y, cfg):
             elo, ehi, eylo, eyhi = env
             base = np.interp(xs, [elo, ehi], [eylo, eyhi])   # the one shared line
         else:
-            base = np.interp(xs, [xs[0], xs[-1]], [ys[0], ys[-1]])   # local per-window line
+            base = np.interp(xs, [a, b], [_anchor_val(x, y, a, half), _anchor_val(x, y, b, half)])   # local line
         area = float(_trapz(np.clip(ys - base, 0, None), xs))
         out.append({"name": name, "area": area, "lo": a, "hi": b})
     return out
@@ -419,6 +421,9 @@ def plot_waterfall(groups, cfg, offset=None):
     edges = []                                  # (y_at_right_edge, label, colour) per group
     for gi, (label, trs) in enumerate(groups.items()):
         color = pal[gi % len(pal)]
+        if not trs:
+            print(f"  [WARN] waterfall: group '{label}' has no traces - skipped")
+            continue
         for ri, (x, y) in enumerate(trs):
             verify.check_trace(x, y, cfg, name=f"{label}#{ri}")
             # waterfalls distinguish groups by vertical POSITION -> solid lines

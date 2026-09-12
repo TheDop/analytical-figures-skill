@@ -272,7 +272,7 @@ def write_peaks_csv(rows, path):
     return path
 
 
-def plot_overlay(entries, cfg, experimental=None, offset=None):
+def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
     """Stacked calculated PXRD of several phases for phase ID (the cocrystal-vs-starting-materials
     figure), in the house waterfall idiom: **solid palette lines** (vertical position separates
     the traces) with the **right-margin per-trace key** (`spectra.edge_labels`), never labels over

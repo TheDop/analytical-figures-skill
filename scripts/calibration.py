@@ -17,15 +17,21 @@ import numpy as np
 from . import style, verify
 
 
+_CAL_NO_SCIPY_WARNED = False
+
+
 def _tmult(df, conf):
     try:
         from scipy import stats
         return float(stats.t.ppf(0.5 + conf / 2, df))
     except Exception:
-        from statistics import NormalDist              # scipy absent: exact z, and say so
-        z = float(NormalDist().inv_cdf(0.5 + conf / 2))
-        print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
-              f"t at {df} dof (bands too narrow at small n)")
+        from statistics import NormalDist              # scipy absent: exact z, and say so (once)
+        z = float(NormalDist().inv_cdf(min(max(0.5 + conf / 2, 1e-12), 1 - 1e-12)))
+        global _CAL_NO_SCIPY_WARNED
+        if not _CAL_NO_SCIPY_WARNED:
+            _CAL_NO_SCIPY_WARNED = True
+            print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
+                  f"t at {df} dof (bands too narrow at small n); further calls stay silent")
         return z
 
 
@@ -137,7 +143,7 @@ def plot_calibration(x, y, cfg, model=None):
     ax.plot(xs, ys - t * se_pred, lw=0.6, ls="--", color="0.5")
     ax.plot(xs, ys + t * se_pred, lw=0.6, ls="--", color="0.5",
             label=f"{int(model['conf']*100)}% pred.")
-    ax.set_ylabel("Response")
+    ax.set_ylabel("Response (y units)")
     ax.legend(loc="best")
     # report R^2 and slope CI in a corner annotation, not as a substitute for residuals
     lo, hi = model["slope_ci"]
@@ -149,8 +155,8 @@ def plot_calibration(x, y, cfg, model=None):
         axr.axhline(0, color="0.6", lw=0.6)
         axr.scatter(model["x"], model["resid"], zorder=3)
         axr.set_ylabel("Resid. (y units)")
-        axr.set_xlabel("Concentration")
+        axr.set_xlabel("Concentration (x units)")
     else:
-        ax.set_xlabel("Concentration")
+        ax.set_xlabel("Concentration (x units)")
     style.finalize_figure(fig)
     return fig, (ax, axr)

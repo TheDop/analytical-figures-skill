@@ -70,7 +70,7 @@ and route into the family module.
 
 | Technique | What it uniquely settles | Needs | Route |
 |---|---|---|---|
-| **PXRD** | *New phase vs physical mixture* (positions), phase match to a target | a diffractometer **or** a supplied/experimental pattern | `crystal_pxrd.plot_overlay` (calc API vs coformer vs cocrystal + experimental); `peak_table`; **`cocrystal.phase_report`** (NNLS sum-of-parents + Rwp + new/lost-peak table) |
+| **PXRD** | *New phase vs physical mixture* (positions), phase match to a target | a diffractometer **or** a supplied/experimental pattern | `crystal_pxrd.plot_overlay_patterns` (calc API vs coformer vs cocrystal + experimental); `peak_table`; **`cocrystal.phase_report`** (NNLS sum-of-parents + Rwp + new/lost-peak table) |
 | **FTIR / Raman** | *Salt vs cocrystal* via proton transfer — the discriminator this skill is built for | an FTIR (benchtop ATR suffices) | `spectra` overlay/waterfall zoomed to **the window of whichever group ionises** (carbonyl/carboxylate, sulfonate, ammonium…) |
 | **ΔpKa rule** | *Predicted* protonation state — orthogonal, zero-cost, run it first | just the two pKa values | `cocrystal.classify_ionisation(pka_acid, pka_base_conjugate)` → zone + caption (`ΔpKa = pKa(baseH⁺) − pKa(acid)`) |
 | **DSC / hot-stage** | *Single new melt vs eutectic* — a fast new-phase screen | a DSC | `charts` (thermogram); not a crystal-family job |
@@ -177,7 +177,7 @@ cocrystal) and to a sum-of-parents model.
 
 ## Routing into the skill (which function)
 
-- **PXRD phase ID / cocrystal-vs-mixture:** `crystal_pxrd.plot_overlay([(label, cif), …],
+- **PXRD phase ID / cocrystal-vs-mixture:** `crystal_pxrd.plot_overlay_patterns([(label, cif), …],
   cfg, experimental=…)` — waterfall calc(cocrystal) vs calc(API) vs calc(coformer) with the
   measured pattern at the bottom; `peak_table` / `write_peaks_csv` for the (2θ, d, hkl, I)
   list. Set `cfg.color_by_component=True` on structure views to keep API vs coformer legible.

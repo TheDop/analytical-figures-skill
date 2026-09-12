@@ -12,9 +12,9 @@ $ python analysis.py
   [INFO] ingest: DM70.5.csv: 108344 B
   [INFO] DM70.5: 3736 pts, monotonic, finite - OK
   [INFO] calibration: 6 pts, monotonic, finite - OK
-  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
-  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
-  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
+  slope 0.00297 per % DM [0.00139, 0.00455]  R2 0.872  n=6
+  LOD 37.1 % DM, LOQ 112.4 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2539 [0.1783, 0.3294] (95% CI), t=9.32, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
   [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
   wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
 'created' timestamp seems very low; regarding as unix timestamp
@@ -34,9 +34,9 @@ wrote pectin_calibration_standalone.py
 $ python pectin_calibration_standalone.py      # the handed-over script, re-run on its own
   [INFO] DM70.5: 3736 pts, monotonic, finite - OK
   [INFO] calibration: 6 pts, monotonic, finite - OK
-  slope 0.00297 per % DM [0.00138, 0.00455]  R2 0.871  n=6
-  LOD 37.3 % DM, LOQ 112.9 % DM  (residual_sd (3.3σ/m, 10σ/m))
-  intercept 0.2531 [0.1773, 0.3289] (95% CI), t=9.27, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
+  slope 0.00297 per % DM [0.00139, 0.00455]  R2 0.872  n=6
+  LOD 37.1 % DM, LOQ 112.4 % DM  (residual_sd (3.3σ/m, 10σ/m))
+  intercept 0.2539 [0.1783, 0.3294] (95% CI), t=9.32, p=0.001 -> constant bias: intercept significantly != 0 (CI excludes 0)
   [INFO] layout: layout audit clean (data present, no tofu, ticks clear, panels labelled)
   wrote C:\Users\uriba\projects\IR_CoCr_Project\.claude\skills\analytical-figures\docs\examples\pectin_calibration\out\pectin_calibration.pdf + .png, caption.txt
 [exit 0]

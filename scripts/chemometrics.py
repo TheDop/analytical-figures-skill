@@ -366,14 +366,17 @@ def _make_folds(n, y, groups, scheme, cfg):
                 "predict a new sample at a SEEN level "
                 "(optimistic for a new level when samples replicate levels)")
     if sch == "kfold":
-        k = int(min(getattr(cfg, "cv_folds", 5), n))
-        # stratified by y: INTERLEAVE the y-sorted order so every fold spans the response range.
-        # (Contiguous blocks of the sorted order would hold out one y range per fold, and the
-        # end folds would be pure extrapolation - the opposite of stratification.)
-        order = np.argsort(y, kind="stable")
-        parts = [order[i::k] for i in range(k) if len(order[i::k])]
+        # stratified by LEVEL: the replicates of one y value stay together (holding them out
+        # one at a time leaves their level in training - leave-one-out's optimism in disguise),
+        # and the sorted levels are interleaved across folds so every fold spans the response
+        # range (contiguous blocks would make the end folds pure extrapolation).
+        levels = np.unique(y)
+        k = int(min(getattr(cfg, "cv_folds", 5), len(levels)))
+        parts = [idx[np.isin(y, levels[i::k])] for i in range(k)]
+        parts = [p for p in parts if len(p)]
         folds = [(np.setdiff1d(idx, p), p) for p in parts]
-        return folds, f"{k}-fold (stratified by y)", "predict a held-out fold"
+        return (folds, f"{k}-fold (stratified by level; a level's replicates stay together)",
+                "predict held-out LEVELS (each fold spans the y range)")
     raise ValueError(f"unknown cv_scheme: {sch!r} (use 'auto'/'loo'/'kfold' or pass groups=)")
 
 
@@ -555,15 +558,20 @@ def plot_scores(ax, model, cfg, color_by=None, comps=(0, 1), cbar=None, cbar_lab
     see the gradient. Returns the PathCollection so the caller can add a colorbar
     (do that AFTER finalize on a constrained-layout figure so it doesn't collide)."""
     T = np.asarray(model["scores"])
+    if T.ndim == 1:
+        T = T[:, None]
     i, j = comps
+    one = T.shape[1] < 2 or j is None or j >= T.shape[1]     # a 1-component model: scores vs sample
+    xs_ = T[:, i]
+    ys_ = np.arange(T.shape[0]) if one else T[:, j]
     kw = dict(s=26, edgecolor="white", linewidth=0.3)
     if color_by is not None:
-        sc = ax.scatter(T[:, i], T[:, j], c=np.asarray(color_by, float), cmap="viridis", **kw)
+        sc = ax.scatter(xs_, ys_, c=np.asarray(color_by, float), cmap="viridis", **kw)
     else:
-        sc = ax.scatter(T[:, i], T[:, j], color=_CYCLE[0], **kw)
+        sc = ax.scatter(xs_, ys_, color=_CYCLE[0], **kw)
     tag = "LV" if model.get("kind") == "pls" else "PC"
     ax.set_xlabel(f"{tag}{i+1} score (a.u.)")
-    ax.set_ylabel(f"{tag}{j+1} score (a.u.)")
+    ax.set_ylabel("sample (index)" if one else f"{tag}{j+1} score (a.u.)")
     if cbar is not None and color_by is not None:
         cb = cbar.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
         cb.set_label(cbar_label or getattr(cfg, "conc_unit", "a.u."), fontsize=7)
@@ -829,7 +837,13 @@ def ddsimca_limits(om, sd, od, alpha=0.05, gamma=0.01, dof="classical"):
     from scipy.stats import chi2
     n = om["n"]
     Nh, h0 = _dd_dof(sd, dof)
-    Nq, q0 = _dd_dof(od, dof)
+    od = np.asarray(od, float)
+    if od.size == 0 or float(np.max(od)) <= 1e-12 * max(1.0, float(np.mean(sd))):
+        print("  [WARN] ddsimca: residual space is empty (components >= rank of the training set) - "
+              "the orthogonal distance carries no information; limits use the score distance only")
+        Nq, q0 = 0, float("inf")                       # Nq*(OD/q0) vanishes instead of 0/0
+    else:
+        Nq, q0 = _dd_dof(od, dof)
     c_crit = float(chi2.ppf(1 - alpha, Nh + Nq))
     c_out = float(chi2.ppf((1 - gamma) ** (1.0 / n), Nh + Nq)) if gamma else None
     return {"Nh": Nh, "Nq": Nq, "h0": h0, "q0": q0, "c_crit": c_crit, "c_out": c_out, "dof": dof}

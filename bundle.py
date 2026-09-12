@@ -242,17 +242,39 @@ def _shadow_check(body_src, skill_srcs):
         if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
                 and node.value.id in SKILL:
             used.add(node.attr)
-    return sorted(defined & used)
+    # ...and a body variable named like a skill MODULE (`charts = []; charts.append(1)`): _debind
+    # strips the `charts.` prefix from every token, so the standalone calls a bare append().
+    return sorted((defined & used) | (defined & set(SKILL)))
+
+
+def _cross_module_collisions():
+    """Top-level names defined in MORE than one skill module: in the flat namespace the later
+    module's definition silently replaces the earlier one (crystal_pxrd.plot_overlay once shadowed
+    spectra.plot_overlay in every bundle). Returns {name: [modules]}."""
+    import ast
+    owner = {}
+    for mod in SKILL:
+        p = os.path.join(SCRIPTS, mod + ".py")
+        if not os.path.exists(p):
+            continue
+        tree = ast.parse(open(p, encoding="utf-8").read())
+        for n in tree.body:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and not n.name.startswith("_"):
+                owner.setdefault(n.name, []).append(mod)
+    return {k: v for k, v in owner.items() if len(v) > 1}
 
 
 def bundle(body_path, out_path, description=None, critic=True):
     hoist, chunks = [], []
 
-    body = open(body_path).read()
+    body = open(body_path, encoding="utf-8").read()
     for name in _shadow_check(body, None):
-        print(f"  [FAIL] '{name}' is defined or assigned in the analysis body AND used as a skill call "
-              f"(module.{name}). After de-binding both become '{name}' and the STANDALONE will "
-              f"break, though this script still runs. Rename the one in the body.")
+        print(f"  [FAIL] '{name}' is defined or assigned in the analysis body and is also a skill "
+              f"function or module name. After de-binding the STANDALONE breaks (NameError / "
+              f"TypeError), though this script still runs. Rename the one in the body.")
+    for name, mods in _cross_module_collisions().items():
+        print(f"  [FAIL] '{name}' is defined at top level in {' and '.join(mods)}: the flat namespace "
+              f"keeps only the last one. Rename it in the skill.")
     body = "\n".join(l for l in body.splitlines() if "sys.path" not in l)
 
     # collect skill-module aliases across ALL sources first, so _debind strips them too
@@ -260,7 +282,7 @@ def bundle(body_path, out_path, description=None, critic=True):
     for mod in SKILL:
         p = os.path.join(SCRIPTS, mod + ".py")
         if os.path.exists(p):
-            aliases.update(_collect_aliases(open(p).read()))
+            aliases.update(_collect_aliases(open(p, encoding="utf-8").read()))
     aliases.update(_collect_aliases(body))
     extra = tuple(aliases)
 
@@ -272,7 +294,7 @@ def bundle(body_path, out_path, description=None, critic=True):
     for mod in SKILL:                                  # dependency order
         p = os.path.join(SCRIPTS, mod + ".py")
         if os.path.exists(p):
-            add(open(p).read(), f"from {mod}.py")
+            add(open(p, encoding="utf-8").read(), f"from {mod}.py")
     add(body, f"analysis body: {os.path.basename(body_path)}")
 
     # de-dupe imports, keep __future__ first (it must precede other statements)
@@ -288,7 +310,7 @@ def bundle(body_path, out_path, description=None, critic=True):
            "# Depends only on the scientific stack; edit the CONFIG block to retune.\n"
            + _provenance_header(body_path, description) + "\n\n"
            + "\n".join(future + hdr) + "\n\n\n" + "\n\n".join(chunks))
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(out)
     if critic:
         _run_critic(body_path)

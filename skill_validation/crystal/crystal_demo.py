@@ -77,7 +77,7 @@ def main():
     entries = [("aspirin", os.path.join(here, "monoclinic_aspirin__COD7247819.cif")),
                ("urea", os.path.join(here, "specialpos_urea__COD1008785.cif")),
                ("lactose", os.path.join(here, "lactose__COD2206486.cif"))]
-    figo, axo, pats = crystal_pxrd.plot_overlay(entries, cfg)
+    figo, axo, pats = crystal_pxrd.plot_overlay_patterns(entries, cfg)
     style.save_fig(figo, os.path.join(cfg.output_dir, "pxrd_overlay"), cfg)
     print("  pxrd_overlay ->", os.path.join(cfg.output_dir, "pxrd_overlay.pdf"))
 

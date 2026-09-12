@@ -686,12 +686,26 @@ def check_trace(x, y, cfg, name="trace", min_points=8, require_monotonic=True):
         dx = np.diff(x)
         if not (np.all(dx > 0) or np.all(dx < 0)):
             f.append(("FAIL", "x axis is not monotonic (concatenation/parse error?)"))
-    # crude noise/spike check: a single sample dominating the dynamic range. An FTIR rule -
-    # sharp Bragg peaks would trip it, so the pxrd domain keeps the structural checks only.
-    if y.size and np.ptp(y) > 0 and getattr(cfg, "domain", "ftir") != "pxrd":
-        spikes = np.abs(np.diff(y, 2))
-        if spikes.size and spikes.max() > 0.5 * np.ptp(y):
-            f.append(("WARN", "large single-sample spike - check for a dead pixel/cosmic ray"))
+    # isolated single-sample spike (dead pixel / cosmic ray / zinger). For every sample, the local
+    # baseline is the median of the outer ring (i-4..i-2, i+2..i+4) and the local noise its MAD.
+    # A spike stands far above (or below) that baseline while BOTH neighbours stay within 25 %
+    # of its excursion; a real band or Bragg peak >= ~1.3 samples wide lifts at least one
+    # neighbour further than that. Domain-independent (the old second-difference rule
+    # false-alarmed on a sharp FTIR band and was switched off for PXRD, where zingers occur).
+    if y.size >= 9 and np.ptp(y) > 0:
+        from numpy.lib.stride_tricks import sliding_window_view
+        W = sliding_window_view(y, 9)
+        ring = np.concatenate([W[:, 0:3], W[:, 6:9]], axis=1)
+        base = np.median(ring, axis=1)
+        noise = 1.4826 * np.median(np.abs(ring - base[:, None]), axis=1) + 1e-12
+        centre, nb_hi, nb_lo = W[:, 4], np.maximum(W[:, 3], W[:, 5]), np.minimum(W[:, 3], W[:, 5])
+        floor = 0.1 * np.ptp(y)
+        up, dn = centre - base, base - centre
+        spike = (((up > floor) & (up > 8 * noise) & (nb_hi - base < 0.25 * up))
+                 | ((dn > floor) & (dn > 8 * noise) & (base - nb_lo < 0.25 * dn)))
+        if spike.any():
+            f.append(("WARN", f"isolated single-sample spike at {int(np.argmax(spike)) + 4} - "
+                              f"check for a dead pixel/cosmic ray"))
     if not f:
         f.append(("INFO", f"{x.size} pts, monotonic, finite - OK"))
     return _resolve(f, cfg, name)
@@ -731,6 +745,9 @@ def same_processing(records, cfg):
     return _resolve(f, cfg, "batch")
 
 
+_VER_NO_SCIPY_WARNED = False
+
+
 def summarize(values, cfg):
     """Honest stats for an error bar. Returns a dict AND a caption string that
     NAMES the statistic, n, and (for CI) the t-multiplier. Never present an
@@ -746,10 +763,13 @@ def summarize(values, cfg):
         from scipy import stats
         t = float(stats.t.ppf(0.5 + p / 2, df=n - 1)) if n > 1 else float("nan")
     except Exception:
-        from statistics import NormalDist              # scipy absent: exact z, and say so
-        z = float(NormalDist().inv_cdf(0.5 + p / 2))
-        print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
-              f"t at n-1={n - 1} dof (CI too narrow at small n)")
+        from statistics import NormalDist              # scipy absent: exact z, and say so (once)
+        z = float(NormalDist().inv_cdf(min(max(0.5 + p / 2, 1e-12), 1 - 1e-12)))
+        global _VER_NO_SCIPY_WARNED
+        if not _VER_NO_SCIPY_WARNED:
+            _VER_NO_SCIPY_WARNED = True
+            print(f"  [WARN] summarize: scipy unavailable - normal quantile z={z:.3f} used instead of "
+                  f"t at n-1={n - 1} dof (CI too narrow at small n); further calls stay silent")
         t = z if n > 1 else float("nan")
     ci = t * sem if n > 1 else float("nan")
     caption = (f"mean ± {int(p*100)}% CI (t={t:.3f}·SEM), n={n}"
@@ -1132,7 +1152,12 @@ def audit_layout(fig, cfg=None):
             ticks = [t.get_text() for t in axis.get_ticklabels()]
             has_numeric = any(any(ch.isdigit() for ch in t) for t in ticks)
             lab = getlab().strip()
-            if has_numeric and lab and not any(c in lab.lower() for c in _UNIT_CUES):
+            import re as _re
+            low = lab.lower()
+            def _cued(c):                       # word-aware for plain words ('ratio' must not match 'concentRATIOn')
+                return (_re.search(r"(?<![a-z])" + _re.escape(c) + r"(?![a-z])", low) is not None
+                        if c.isalpha() else c in low)
+            if has_numeric and lab and not any(_cued(c) for c in _UNIT_CUES):
                 f.append(("WARN", f"axis '{lab}' has numeric ticks but no unit cue "
                                   f"(add a unit, or mark dimensionless/a.u./ratio)"))
     # off-canvas clipping of NON-tick text (title, axis labels, annotations, panel
@@ -1487,7 +1512,7 @@ def normalize(x, y, cfg):
         m = np.max(np.abs(y))
         return y / m if m else y
     if cfg.normalize == "area":
-        a = _trapz(np.abs(y), x)
+        a = abs(_trapz(np.abs(y), x))                 # a descending axis must not flip the sign
         return y / a if a else y
     raise ValueError(f"unknown normalize '{cfg.normalize}'")
 
@@ -1711,6 +1736,9 @@ def integrate_bands(x, y, cfg):
           up and carve area off the smaller band.
     """
     x = np.asarray(x, float); y = np.asarray(y, float)
+    o = np.argsort(x, kind="stable")                 # a descending export (raw .spc: 4000 -> 650) would
+    x, y = x[o], y[o]                                # flip the trapezoid sign and break np.interp
+    half = 2.0 if getattr(cfg, "domain", "ftir") == "ftir" else 0.0   # anchor averaging window (x units)
     windows = cfg.integration_windows
     mode = getattr(cfg, "integration_baseline", "per_window")
 
@@ -1721,8 +1749,7 @@ def integrate_bands(x, y, cfg):
         env_hi = max(max(lo, hi) for lo, hi, _ in windows)
         em = (x >= env_lo) & (x <= env_hi)
         if em.sum() >= 2:
-            xe = x[em]
-            env = (env_lo, env_hi, y[em][0], y[em][-1])   # baseline through the envelope edges
+            env = (env_lo, env_hi, _anchor_val(x, y, env_lo, half), _anchor_val(x, y, env_hi, half))
     elif mode not in ("per_window", "shared"):
         raise ValueError(f"unknown integration_baseline '{mode}'")
 
@@ -1738,7 +1765,7 @@ def integrate_bands(x, y, cfg):
             elo, ehi, eylo, eyhi = env
             base = np.interp(xs, [elo, ehi], [eylo, eyhi])   # the one shared line
         else:
-            base = np.interp(xs, [xs[0], xs[-1]], [ys[0], ys[-1]])   # local per-window line
+            base = np.interp(xs, [a, b], [_anchor_val(x, y, a, half), _anchor_val(x, y, b, half)])   # local line
         area = float(_trapz(np.clip(ys - base, 0, None), xs))
         out.append({"name": name, "area": area, "lo": a, "hi": b})
     return out
@@ -1792,6 +1819,9 @@ def plot_waterfall(groups, cfg, offset=None):
     edges = []                                  # (y_at_right_edge, label, colour) per group
     for gi, (label, trs) in enumerate(groups.items()):
         color = pal[gi % len(pal)]
+        if not trs:
+            print(f"  [WARN] waterfall: group '{label}' has no traces - skipped")
+            continue
         for ri, (x, y) in enumerate(trs):
             check_trace(x, y, cfg, name=f"{label}#{ri}")
             # waterfalls distinguish groups by vertical POSITION -> solid lines
@@ -1834,15 +1864,21 @@ The correctness traps this guards against:
 """
 
 
+_CAL_NO_SCIPY_WARNED = False
+
+
 def _tmult(df, conf):
     try:
         from scipy import stats
         return float(stats.t.ppf(0.5 + conf / 2, df))
     except Exception:
-        from statistics import NormalDist              # scipy absent: exact z, and say so
-        z = float(NormalDist().inv_cdf(0.5 + conf / 2))
-        print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
-              f"t at {df} dof (bands too narrow at small n)")
+        from statistics import NormalDist              # scipy absent: exact z, and say so (once)
+        z = float(NormalDist().inv_cdf(min(max(0.5 + conf / 2, 1e-12), 1 - 1e-12)))
+        global _CAL_NO_SCIPY_WARNED
+        if not _CAL_NO_SCIPY_WARNED:
+            _CAL_NO_SCIPY_WARNED = True
+            print(f"  [WARN] calibration: scipy unavailable - normal quantile z={z:.3f} used instead of "
+                  f"t at {df} dof (bands too narrow at small n); further calls stay silent")
         return z
 
 
@@ -1954,7 +1990,7 @@ def plot_calibration(x, y, cfg, model=None):
     ax.plot(xs, ys - t * se_pred, lw=0.6, ls="--", color="0.5")
     ax.plot(xs, ys + t * se_pred, lw=0.6, ls="--", color="0.5",
             label=f"{int(model['conf']*100)}% pred.")
-    ax.set_ylabel("Response")
+    ax.set_ylabel("Response (y units)")
     ax.legend(loc="best")
     # report R^2 and slope CI in a corner annotation, not as a substitute for residuals
     lo, hi = model["slope_ci"]
@@ -1966,9 +2002,9 @@ def plot_calibration(x, y, cfg, model=None):
         axr.axhline(0, color="0.6", lw=0.6)
         axr.scatter(model["x"], model["resid"], zorder=3)
         axr.set_ylabel("Resid. (y units)")
-        axr.set_xlabel("Concentration")
+        axr.set_xlabel("Concentration (x units)")
     else:
-        ax.set_xlabel("Concentration")
+        ax.set_xlabel("Concentration (x units)")
     finalize_figure(fig)
     return fig, (ax, axr)
 
@@ -2341,11 +2377,17 @@ def _make_folds(n, y, groups, scheme, cfg):
                 "predict a new sample at a SEEN level "
                 "(optimistic for a new level when samples replicate levels)")
     if sch == "kfold":
-        k = int(min(getattr(cfg, "cv_folds", 5), n))
-        order = np.argsort(y, kind="stable")            # spread each fold across the y range
-        parts = [p for p in np.array_split(order, k) if len(p)]
+        # stratified by LEVEL: the replicates of one y value stay together (holding them out
+        # one at a time leaves their level in training - leave-one-out's optimism in disguise),
+        # and the sorted levels are interleaved across folds so every fold spans the response
+        # range (contiguous blocks would make the end folds pure extrapolation).
+        levels = np.unique(y)
+        k = int(min(getattr(cfg, "cv_folds", 5), len(levels)))
+        parts = [idx[np.isin(y, levels[i::k])] for i in range(k)]
+        parts = [p for p in parts if len(p)]
         folds = [(np.setdiff1d(idx, p), p) for p in parts]
-        return folds, f"{k}-fold (stratified by y)", "predict a held-out fold"
+        return (folds, f"{k}-fold (stratified by level; a level's replicates stay together)",
+                "predict held-out LEVELS (each fold spans the y range)")
     raise ValueError(f"unknown cv_scheme: {sch!r} (use 'auto'/'loo'/'kfold' or pass groups=)")
 
 
@@ -2527,15 +2569,20 @@ def plot_scores(ax, model, cfg, color_by=None, comps=(0, 1), cbar=None, cbar_lab
     see the gradient. Returns the PathCollection so the caller can add a colorbar
     (do that AFTER finalize on a constrained-layout figure so it doesn't collide)."""
     T = np.asarray(model["scores"])
+    if T.ndim == 1:
+        T = T[:, None]
     i, j = comps
+    one = T.shape[1] < 2 or j is None or j >= T.shape[1]     # a 1-component model: scores vs sample
+    xs_ = T[:, i]
+    ys_ = np.arange(T.shape[0]) if one else T[:, j]
     kw = dict(s=26, edgecolor="white", linewidth=0.3)
     if color_by is not None:
-        sc = ax.scatter(T[:, i], T[:, j], c=np.asarray(color_by, float), cmap="viridis", **kw)
+        sc = ax.scatter(xs_, ys_, c=np.asarray(color_by, float), cmap="viridis", **kw)
     else:
-        sc = ax.scatter(T[:, i], T[:, j], color=_CYCLE[0], **kw)
+        sc = ax.scatter(xs_, ys_, color=_CYCLE[0], **kw)
     tag = "LV" if model.get("kind") == "pls" else "PC"
     ax.set_xlabel(f"{tag}{i+1} score (a.u.)")
-    ax.set_ylabel(f"{tag}{j+1} score (a.u.)")
+    ax.set_ylabel("sample (index)" if one else f"{tag}{j+1} score (a.u.)")
     if cbar is not None and color_by is not None:
         cb = cbar.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
         cb.set_label(cbar_label or getattr(cfg, "conc_unit", "a.u."), fontsize=7)
@@ -2801,7 +2848,13 @@ def ddsimca_limits(om, sd, od, alpha=0.05, gamma=0.01, dof="classical"):
     from scipy.stats import chi2
     n = om["n"]
     Nh, h0 = _dd_dof(sd, dof)
-    Nq, q0 = _dd_dof(od, dof)
+    od = np.asarray(od, float)
+    if od.size == 0 or float(np.max(od)) <= 1e-12 * max(1.0, float(np.mean(sd))):
+        print("  [WARN] ddsimca: residual space is empty (components >= rank of the training set) - "
+              "the orthogonal distance carries no information; limits use the score distance only")
+        Nq, q0 = 0, float("inf")                       # Nq*(OD/q0) vanishes instead of 0/0
+    else:
+        Nq, q0 = _dd_dof(od, dof)
     c_crit = float(chi2.ppf(1 - alpha, Nh + Nq))
     c_out = float(chi2.ppf((1 - gamma) ** (1.0 / n), Nh + Nq)) if gamma else None
     return {"Nh": Nh, "Nq": Nq, "h0": h0, "q0": q0, "c_crit": c_crit, "c_out": c_out, "dof": dof}
@@ -4181,20 +4234,26 @@ def plot(struct, cfg, experimental=None, pattern=None):
     return fig, ax, pattern
 
 
-def _all_reflections(struct, wl, tth_min, tth_max, hmax=6):
-    """(2theta, (h,k,l), d) for all |index|<=hmax reflections in the 2theta window, from the cell
-    metric. For peak INDEXING only — no structure factors / systematic absences — an aid, not a
-    full reflection list."""
+def _all_reflections(struct, wl, tth_min, tth_max, hmax=None):
+    """(2theta, (h,k,l), d) for every reflection in the 2theta window, from the cell metric. For
+    peak INDEXING only — no structure factors / systematic absences — an aid, not a full
+    reflection list. The index bound per axis follows the cell and the window: |h| <= a / d_min
+    with d_min = wl / (2 sin(theta_max)) (exact for any metric, |h| = |a . d*| <= a |d*|), so a
+    24 A axis at 50 deg 2theta reaches h = 13 where a fixed cap of 6 silently dropped every
+    higher-order reflection along it. Pass `hmax` to force a single cap."""
     ca, cb, cg = (math.cos(math.radians(t)) for t in (struct.al, struct.be, struct.ga))
     a, b, c = struct.a, struct.b, struct.c
     G = np.array([[a * a, a * b * cg, a * c * cb],
                   [a * b * cg, b * b, b * c * ca],
                   [a * c * cb, b * c * ca, c * c]])
     Gs = np.linalg.inv(G)
+    d_min = wl / (2.0 * math.sin(math.radians(min(tth_max, 179.0) / 2.0)))
+    hb, kb, lb = ((hmax,) * 3 if hmax is not None
+                  else tuple(int(ax / d_min) + 1 for ax in (a, b, c)))
     out = []
-    for h in range(-hmax, hmax + 1):
-        for k in range(-hmax, hmax + 1):
-            for l in range(-hmax, hmax + 1):
+    for h in range(-hb, hb + 1):
+        for k in range(-kb, kb + 1):
+            for l in range(-lb, lb + 1):
                 if (h, k, l) == (0, 0, 0):
                     continue
                 hkl = np.array([h, k, l], float)
@@ -4244,7 +4303,7 @@ def write_peaks_csv(rows, path):
     return path
 
 
-def plot_overlay(entries, cfg, experimental=None, offset=None):
+def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
     """Stacked calculated PXRD of several phases for phase ID (the cocrystal-vs-starting-materials
     figure), in the house waterfall idiom: **solid palette lines** (vertical position separates
     the traces) with the **right-margin per-trace key** (`edge_labels`), never labels over
@@ -5350,11 +5409,12 @@ def classify_ionisation(pka_acid, pka_base_conjugate,
 
 
 def _resolve_weight(yo, weight):
-    """'auto' → 'poisson' only when every y_obs > 0 (counts-like data with a background);
-    a background-subtracted or normalised profile with true zeros gets 'unit' - under Poisson
-    weights one zero would weigh 1/eps and the Rwp would be meaningless."""
+    """'auto' → 'poisson' only when the profile carries a real background, min(y) > 1e-3·max(y)
+    (counts-like data); a background-subtracted, floored or normalised profile gets 'unit'. A
+    RELATIVE floor, not an exact zero, so the choice cannot flip on one channel and a profile
+    floored at 1e-6 is not Poisson-weighted into a meaningless Rwp."""
     if weight == "auto":
-        return "poisson" if (yo.size and float(np.min(yo)) > 0) else "unit"
+        return "poisson" if (yo.size and float(np.min(yo)) > 1e-3 * float(np.max(yo))) else "unit"
     return weight
 
 

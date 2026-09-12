@@ -77,11 +77,12 @@ def classify_ionisation(pka_acid, pka_base_conjugate,
 
 
 def _resolve_weight(yo, weight):
-    """'auto' → 'poisson' only when every y_obs > 0 (counts-like data with a background);
-    a background-subtracted or normalised profile with true zeros gets 'unit' - under Poisson
-    weights one zero would weigh 1/eps and the Rwp would be meaningless."""
+    """'auto' → 'poisson' only when the profile carries a real background, min(y) > 1e-3·max(y)
+    (counts-like data); a background-subtracted, floored or normalised profile gets 'unit'. A
+    RELATIVE floor, not an exact zero, so the choice cannot flip on one channel and a profile
+    floored at 1e-6 is not Poisson-weighted into a meaningless Rwp."""
     if weight == "auto":
-        return "poisson" if (yo.size and float(np.min(yo)) > 0) else "unit"
+        return "poisson" if (yo.size and float(np.min(yo)) > 1e-3 * float(np.max(yo))) else "unit"
     return weight
 
 

@@ -219,7 +219,7 @@ symmetry mates auto-superscripted); unit-cell/packing fill = `cell_fill` (`molec
 Cocrystal ID — **start with `references/cocrystal_id.md`** (the decision layer: cocrystal vs salt
 vs physical mixture vs polymorph, and which evidence settles it — PXRD new-phase, the FTIR
 proton-transfer/ΔpKa salt discriminator, the lab-capability gate — routing into the tools below).
-`crystal_pxrd.plot_overlay` waterfalls calc(cocrystal) vs starting materials (+ experimental) for
+`crystal_pxrd.plot_overlay_patterns` waterfalls calc(cocrystal) vs starting materials (+ experimental) for
 phase discrimination; `peak_table`/`write_peaks_csv` emit a (2θ, d, hkl, I) list;
 `cfg.color_by_component` mutes all but the largest molecule to distinguish API vs coformer.
 

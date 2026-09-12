@@ -309,6 +309,20 @@ crashing instead of skipping without scikit-learn, silent fallbacks in `correct_
 the t-multiplier (now they WARN and the z quantile is exact), the FTIR dead-pixel heuristic bypassing
 the whole ingest gate for PXRD, `rwp`'s Poisson default on profiles with true zeros (now `auto`),
 `simulate_pattern`'s hard-coded Cu α1 and two silent no-ops, an undeclared `escape_tol_frac` knob.
+Round 3 (the narrowed re-run that completed; 16 confirmed / 5 plausible / 2 refuted): fixed —
+`diagnostics_figure` crashed on a 1-component model; `crystal_pxrd.plot_overlay` shadowed
+`spectra.plot_overlay` in every bundle (renamed `plot_overlay_patterns`; the bundler now fails on
+cross-module collisions and on body variables named like a module); `integrate_bands` /
+`normalize('area')` returned a NEGATIVE area on a descending axis (the raw .spc export!);
+`bundle.py` opened files without an encoding (dead on a stock Windows Python); DD-SIMCA divided
+by q0 = 0 when the residual space is empty; the round-2 k-fold spread a level's replicates across
+folds (now stratified by level); the round-1 `rwp` 'auto' rule flipped on an exact zero (now a
+relative floor); the round-1 spike-check bypass for PXRD replaced by an isolation rule that works
+in both domains; `integrate_bands` now anchors on the same averaged anchor values as
+`band_metric`; empty waterfall groups, unit-cue word matching, warn-once scipy fallbacks.
+Dropped as low value: `chemometrics._CYCLE` ignores `cfg.palette`; `diagnostics_figure`
+rasterises five times; `_check_xy` prints per permutation; `choose_n_components` on a NaN-first scan.
+
 Deferred (real, larger):
 
 - **One H-bond / bond predicate.** `crystal_view._hbond_pairs` / `_hbond_env_atoms` and the bond
