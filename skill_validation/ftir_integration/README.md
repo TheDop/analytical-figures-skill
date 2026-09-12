@@ -33,7 +33,7 @@ not, because the paper used an undocumented band-specific σ. The skill's
 `integrate_bands` originally drew a **separate local baseline per window**. The
 pectin ester/carboxylate bands overlap on a shared pedestal, so the per-window
 baseline followed the valley *up* and carved area off the smaller band (DM3 ester
-area came out ~5× too small) → calibration R² collapsed to **0.77**.
+area came out ~5× too small) → calibration R² collapsed to **0.76**.
 Added `cfg.integration_baseline = "shared"`: **one** baseline across the whole
 envelope with a vertical-drop split at the window boundary (the standard
 "drop-perpendicular" method). That removes the artefact and lifts the
