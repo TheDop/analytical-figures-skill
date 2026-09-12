@@ -1576,6 +1576,32 @@ def _anchor_val(x, y, w, half=2.0):
     return float(y[m].mean()) if m.any() else float(y[np.argmin(np.abs(x - w))])
 
 
+def band_area(x, y, lo, hi, anchor_half=2.0, line=None, clip=True):
+    """THE band-area primitive: trapezoid area of y above the straight line between the two
+    anchors, over lo <= x <= hi. Both `band_metric` (one band, locked anchors) and
+    `integrate_bands` (declared windows, per-window or shared baseline) call this, so an
+    axis-order or anchor-value bug cannot exist in one path and not the other.
+
+    x, y need not be sorted (a descending instrument export is sorted here). The baseline
+    value at each anchor is `_anchor_val`'s mean over +/- anchor_half x units, unless
+    `line=(y_lo, y_hi)` supplies the values directly (the shared-envelope mode). `clip`
+    drops the parts of the band that dip below the line (the house convention; pass False
+    for a signed area). Returns dict(area, xs, corr): the area (NaN when the window holds
+    fewer than 2 samples), the in-window x and the baseline-corrected trace."""
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    o = np.argsort(x, kind="stable"); x, y = x[o], y[o]
+    lo, hi = sorted((float(lo), float(hi)))
+    m = (x >= lo) & (x <= hi)
+    if m.sum() < 2:
+        return {"area": float("nan"), "xs": x[m], "corr": np.full(int(m.sum()), np.nan)}
+    if line is None:
+        line = (_anchor_val(x, y, lo, anchor_half), _anchor_val(x, y, hi, anchor_half))
+    xs, ys = x[m], y[m]
+    corr = ys - np.interp(xs, [lo, hi], [float(line[0]), float(line[1])])
+    area = float(_trapz(np.clip(corr, 0, None) if clip else corr, xs))
+    return {"area": area, "xs": xs, "corr": corr}
+
+
 # ------------------------------------------------------------ automatic anchors
 def find_anchors(x, y, center, gap=12.0, maxhw=60.0, smooth=(13, 3)):
     """Locate the flanking local minima (the 'continuum-return' points) either side
@@ -1670,15 +1696,12 @@ def band_metric(x, y, metric="area", anchors=None, center=None, window=None,
             raise ValueError(f"band_metric({metric}) needs `anchors` or `center`")
         anchors = find_anchors(x, y, center, gap=gap, maxhw=maxhw, smooth=anchor_smooth)
     a_lo, a_hi = sorted(anchors)
-    m = (x >= a_lo) & (x <= a_hi)
-    if m.sum() < 2:
+    r = band_area(x, y, a_lo, a_hi, anchor_half=anchor_half)          # the one primitive
+    if r["xs"].size < 2:
         return float("nan")
-    xs, ys = x[m], y[m]
-    base = np.interp(xs, [a_lo, a_hi],
-                     [_anchor_val(x, y, a_lo, anchor_half), _anchor_val(x, y, a_hi, anchor_half)])
-    corr = ys - base
     if metric == "area":
-        return float(_trapz(np.clip(corr, 0, None), xs))
+        return r["area"]
+    xs, corr = r["xs"], r["corr"]
     w = window if window else (a_lo, a_hi)
     wl, wh = sorted(w); mm = (xs >= wl) & (xs <= wh)
     return float(corr[mm].max()) if mm.any() else float("nan")
@@ -1756,18 +1779,13 @@ def integrate_bands(x, y, cfg):
     out = []
     for lo, hi, name in windows:
         a, b = sorted((lo, hi))
-        m = (x >= a) & (x <= b)
-        if m.sum() < 2:
-            out.append({"name": name, "area": float("nan"), "lo": a, "hi": b})
-            continue
-        xs, ys = x[m], y[m]
-        if env is not None:
+        if env is not None:                       # the one shared line, evaluated at this window's edges
             elo, ehi, eylo, eyhi = env
-            base = np.interp(xs, [elo, ehi], [eylo, eyhi])   # the one shared line
-        else:
-            base = np.interp(xs, [a, b], [_anchor_val(x, y, a, half), _anchor_val(x, y, b, half)])   # local line
-        area = float(_trapz(np.clip(ys - base, 0, None), xs))
-        out.append({"name": name, "area": area, "lo": a, "hi": b})
+            line = tuple(np.interp([a, b], [elo, ehi], [eylo, eyhi]))
+            r = band_area(x, y, a, b, line=line)
+        else:                                     # local line between this window's own anchors
+            r = band_area(x, y, a, b, anchor_half=half)
+        out.append({"name": name, "area": r["area"], "lo": a, "hi": b})
     return out
 
 
