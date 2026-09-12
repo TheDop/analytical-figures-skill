@@ -367,8 +367,11 @@ def _make_folds(n, y, groups, scheme, cfg):
                 "(optimistic for a new level when samples replicate levels)")
     if sch == "kfold":
         k = int(min(getattr(cfg, "cv_folds", 5), n))
-        order = np.argsort(y, kind="stable")            # spread each fold across the y range
-        parts = [p for p in np.array_split(order, k) if len(p)]
+        # stratified by y: INTERLEAVE the y-sorted order so every fold spans the response range.
+        # (Contiguous blocks of the sorted order would hold out one y range per fold, and the
+        # end folds would be pure extrapolation - the opposite of stratification.)
+        order = np.argsort(y, kind="stable")
+        parts = [order[i::k] for i in range(k) if len(order[i::k])]
         folds = [(np.setdiff1d(idx, p), p) for p in parts]
         return folds, f"{k}-fold (stratified by y)", "predict a held-out fold"
     raise ValueError(f"unknown cv_scheme: {sch!r} (use 'auto'/'loo'/'kfold' or pass groups=)")

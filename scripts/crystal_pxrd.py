@@ -203,20 +203,26 @@ def plot(struct, cfg, experimental=None, pattern=None):
     return fig, ax, pattern
 
 
-def _all_reflections(struct, wl, tth_min, tth_max, hmax=6):
-    """(2theta, (h,k,l), d) for all |index|<=hmax reflections in the 2theta window, from the cell
-    metric. For peak INDEXING only — no structure factors / systematic absences — an aid, not a
-    full reflection list."""
+def _all_reflections(struct, wl, tth_min, tth_max, hmax=None):
+    """(2theta, (h,k,l), d) for every reflection in the 2theta window, from the cell metric. For
+    peak INDEXING only — no structure factors / systematic absences — an aid, not a full
+    reflection list. The index bound per axis follows the cell and the window: |h| <= a / d_min
+    with d_min = wl / (2 sin(theta_max)) (exact for any metric, |h| = |a . d*| <= a |d*|), so a
+    24 A axis at 50 deg 2theta reaches h = 13 where a fixed cap of 6 silently dropped every
+    higher-order reflection along it. Pass `hmax` to force a single cap."""
     ca, cb, cg = (math.cos(math.radians(t)) for t in (struct.al, struct.be, struct.ga))
     a, b, c = struct.a, struct.b, struct.c
     G = np.array([[a * a, a * b * cg, a * c * cb],
                   [a * b * cg, b * b, b * c * ca],
                   [a * c * cb, b * c * ca, c * c]])
     Gs = np.linalg.inv(G)
+    d_min = wl / (2.0 * math.sin(math.radians(min(tth_max, 179.0) / 2.0)))
+    hb, kb, lb = ((hmax,) * 3 if hmax is not None
+                  else tuple(int(ax / d_min) + 1 for ax in (a, b, c)))
     out = []
-    for h in range(-hmax, hmax + 1):
-        for k in range(-hmax, hmax + 1):
-            for l in range(-hmax, hmax + 1):
+    for h in range(-hb, hb + 1):
+        for k in range(-kb, kb + 1):
+            for l in range(-lb, lb + 1):
                 if (h, k, l) == (0, 0, 0):
                     continue
                 hkl = np.array([h, k, l], float)
