@@ -13,6 +13,11 @@ description: >-
   LOQ, residuals, recovery, publication figure, journal figure; crystal structure,
   CIF, .cif, space group, hydrogen bond, displacement ellipsoid / ORTEP, packing
   diagram, calculated PXRD from a CIF, structure validation table.
+compatibility: >-
+  Python 3.10+ with numpy and matplotlib (scipy recommended). Runs offline; network access is
+  used only by the optional scripts/sources.py lookups (Crystallography Open Database, PubChem)
+  and needs no credentials. Chemometrics needs scikit-learn; the crystal family needs gemmi and
+  Dans-Diffraction (pymatgen, pyvista optional).
 license: MIT
 metadata:
   version: "1.0"
