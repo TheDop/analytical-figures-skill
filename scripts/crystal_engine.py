@@ -2,7 +2,9 @@
 crystal_engine.py  -  CIF -> validated crystal data. The single source of truth for the
 crystal family: parse, symmetry-expand, density triple-check, geometry, H-bonds. The
 figures (crystal_pxrd, crystal_view) consume what this returns; they never recompute, so a
-figure can never assert a contact the table doesn't list.
+figure can never assert a contact the table doesn't list. The bond and H-bond criteria exist
+ONCE, as `is_bonded` and `hbond_geometry`/`is_hbond`; every search (here and in crystal_view)
+goes through them.
 
 Pure computation + Tier-1 gates (no plotting). gemmi is imported lazily (heavy dep; a
 non-CIF job never pulls it). Conventions/constants are pinned in the block below;
@@ -13,6 +15,9 @@ ferrocene, flufenamic, lactose, L-alanine, PTU-ellagic + synthetic broken-input 
     expand(struct)            unique (frac,sym,occ) cell positions (global atom x symop dedup)
     densities(struct, cfg)    the signature triple-check + F(000) + element counts + branch gate
     special_positions(struct) atoms on a symmetry element (orbit < n_ops)
+    is_bonded(...)            THE covalent-bond predicate (radii + tolerance + both disorder exclusions)
+    hbond_geometry / is_hbond THE D-H...A predicate (donor, X-H normalization, vdW, angle, disorder)
+    cell_atoms / supercell    cached cartesian cell + lattice-image block with KD-trees (all searches)
     bonds(struct, cfg)        covalent-radii bonds, disorder-aware
     hbonds(struct, cfg)       X-H-normalized D-H...A with symmetry-expanded search + geom_hbond xref
     validate(struct, cfg)     run all Tier-1 gates, assemble the validation-table rows
@@ -57,6 +62,9 @@ class Structure:
         self.__dict__.update(kw)
         self._uniq = None
         self._alt = None
+        self._cell_xyz = None      # cell_atoms(): cartesian coordinates of expand()
+        self._sup = {}             # supercell(): image blocks keyed by their (lo, hi) ranges
+        self._pxrd = {}            # crystal_pxrd: Dans crystal / powder / cross-check caches
 
     def cart(self, frac):
         p = self.cell.orthogonalize(_gemmi().Fractional(float(frac[0]), float(frac[1]), float(frac[2])))
@@ -99,19 +107,100 @@ def _parse_formula(s):
     return out
 
 
+_VDW_MEMO, _COV_MEMO = {}, {}
+
+
 def _vdw(sym):
     if sym in VDW:
         return VDW[sym]
-    try:
-        r = _gemmi().Element(sym).vdw_r
-        return r if r and r > 0 else 1.70
-    except Exception:
-        return 1.70
+    if sym not in _VDW_MEMO:
+        try:
+            r = _gemmi().Element(sym).vdw_r
+            _VDW_MEMO[sym] = r if r and r > 0 else 1.70
+        except Exception:
+            _VDW_MEMO[sym] = 1.70
+    return _VDW_MEMO[sym]
+
+
+def _cov_r(sym):
+    """Covalent radius (gemmi/Cordero), memoised per element — a gemmi Element construction
+    per atom pair was the dominant cost of every all-pairs search."""
+    if sym not in _COV_MEMO:
+        _COV_MEMO[sym] = _gemmi().Element(sym).covalent_r
+    return _COV_MEMO[sym]
 
 
 def _covsum(s1, s2):
-    g = _gemmi()
-    return g.Element(s1).covalent_r + g.Element(s2).covalent_r
+    return _cov_r(s1) + _cov_r(s2)
+
+
+def bond_search_radius(syms):
+    """The largest distance at which any pair drawn from `syms` can still be bonded — the
+    KD-tree cutoff for a bond search (exact, not a heuristic: is_bonded rejects beyond it)."""
+    rmax = max((_cov_r(x) for x in set(syms)), default=0.7)
+    return 2.0 * rmax + BOND_TOL
+
+
+def is_bonded(sym_i, sym_j, d, occ_i=1.0, occ_j=1.0, label_i=None, label_j=None, alt=None):
+    """THE covalent-bond predicate, shared by every bond search in the family (engine table
+    AND figures). d (A) is bonded when 0.4 < d <= covalent-radii sum + BOND_TOL, EXCEPT
+    (1) near-coincident sub-unity sites (both occ < 1 and d < DISORDER_MIN) and (2) labelled
+    disorder alternatives (`alt` from disorder_alternatives). Pass `alt` wherever labels are
+    known, so a figure never draws a bond the table suppresses."""
+    if d <= 0.4 or d > _covsum(sym_i, sym_j) + BOND_TOL:
+        return False
+    if occ_i < 1 and occ_j < 1 and d < DISORDER_MIN:
+        return False
+    if alt is not None and label_i is not None and label_j in alt.get(label_i, ()):
+        return False
+    return True
+
+
+def hbond_sets(cfg):
+    """(donors, acceptors) element sets from cfg (weak mode adds C donors)."""
+    return (set(cfg.hbond_donors) | ({"C"} if cfg.hbond_weak else set()), set(cfg.hbond_acceptors))
+
+
+def hbond_geometry(D, H, A, cfg, alt=None, donors=None, acceptors=None):
+    """THE D-H...A predicate, shared by the engine table and the figures. D, H, A are atom
+    dicts with 'sym', 'xyz' (cartesian) and 'label'; D must be H's nearest heavy atom (the
+    caller's search finds it). Returns None when the triple is not a candidate at all — D is
+    not a donor, H is not bonded to D, A is not an acceptor, D...A outside [0.4, 4.0] — else
+    a dict {DH, HA, DA, angle, hpos, kind}: hpos is the X-H-normalized hydrogen (cfg.xh_normalize,
+    Allen & Bruno neutron distances), and kind is
+        'hbond'    angle >= cfg.hbond_angle_min and H...A within the vdW sum  (asserted)
+        'contact'  H...A within vdW, GEOM_CONTACT_MIN <= angle < floor       (listed, not asserted)
+        'bent'     H...A within vdW, angle below GEOM_CONTACT_MIN
+        'far'      H...A beyond the vdW sum
+        'disorder' A is a disorder alternative of D (`alt`) — suppressed before any geometry.
+    `is_hbond` is the boolean view of this (kind == 'hbond')."""
+    if donors is None or acceptors is None:
+        donors, acceptors = hbond_sets(cfg)
+    if D["sym"] not in donors or A["sym"] not in acceptors:
+        return None
+    dDH = float(np.linalg.norm(D["xyz"] - H["xyz"]))
+    if dDH > _covsum(D["sym"], "H") + BOND_TOL:
+        return None
+    DA = float(np.linalg.norm(A["xyz"] - D["xyz"]))
+    if DA < 0.4 or DA > 4.0:
+        return None
+    if alt is not None and A["label"] in alt.get(D["label"], ()):
+        return {"DH": dDH, "DA": DA, "HA": None, "angle": None, "hpos": H["xyz"], "kind": "disorder"}
+    hpos = H["xyz"]
+    if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
+        hpos = D["xyz"] + (H["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
+    HA = float(np.linalg.norm(A["xyz"] - hpos))
+    if HA > _vdw("H") + _vdw(A["sym"]):
+        return {"DH": dDH, "DA": DA, "HA": HA, "angle": None, "hpos": hpos, "kind": "far"}
+    ang = _angle(D["xyz"], hpos, A["xyz"])
+    kind = "hbond" if ang >= cfg.hbond_angle_min else ("contact" if ang >= GEOM_CONTACT_MIN else "bent")
+    return {"DH": dDH, "DA": DA, "HA": HA, "angle": ang, "hpos": hpos, "kind": kind}
+
+
+def is_hbond(D, H, A, cfg, alt=None, donors=None, acceptors=None):
+    """True when D-H...A is an asserted H-bond by the engine's criteria (see hbond_geometry)."""
+    g = hbond_geometry(D, H, A, cfg, alt, donors, acceptors)
+    return g is not None and g["kind"] == "hbond"
 
 
 def _angle(p, q, r):
@@ -265,6 +354,80 @@ def expand(struct):
                                   "occ": at["occ"], "label": at["label"]})
     struct._uniq = list(uniq.values())
     return struct._uniq
+
+
+def cell_atoms(struct):
+    """expand(struct) with cartesian 'xyz' attached (gemmi orthogonalization, once per site,
+    cached). Fresh dicts every call — callers may annotate them."""
+    if struct._cell_xyz is None:
+        struct._cell_xyz = [struct.cart(u["frac"]) for u in expand(struct)]
+    return [{**u, "xyz": x} for u, x in zip(expand(struct), struct._cell_xyz)]
+
+
+class Supercell:
+    """An immutable block of lattice images of the cell atoms (ranges lo..hi per axis, in the
+    same image order as a nested di/dj/dk loop), as arrays plus cKDTrees — the one neighbour-
+    search substrate for bonds, H-bonds, molecule completion and packing. `rec(i)` builds a
+    FRESH atom dict (callers annotate what they select; the cache stays clean)."""
+    def __init__(self, struct, lo, hi):
+        from scipy.spatial import cKDTree
+        base = cell_atoms(struct)
+        origin = struct.cart(np.zeros(3))
+        cells, shifts = [], []
+        for di in range(lo[0], hi[0] + 1):
+            for dj in range(lo[1], hi[1] + 1):
+                for dk in range(lo[2], hi[2] + 1):
+                    cells.append((di, dj, dk))
+                    shifts.append(struct.cart(np.array([di, dj, dk], float)) - origin)
+        n = len(base)
+        self.n_cell, self.n_images = n, len(cells)
+        self.sym = [a["sym"] for a in base] * len(cells)
+        self.label = [a["label"] for a in base] * len(cells)
+        self.occ = np.array([a["occ"] for a in base] * len(cells), float)
+        self.cell = [c for c in cells for _ in range(n)]
+        bx = np.array([a["xyz"] for a in base], float).reshape(n, 3)
+        bf = np.array([a["frac"] for a in base], float).reshape(n, 3)
+        self.xyz = np.concatenate([bx + sh for sh in shifts]) if cells else bx[:0]
+        self.frac = np.concatenate([bf + np.array(c, float) for c in cells]) if cells else bf[:0]
+        self.tree = cKDTree(self.xyz) if len(self.xyz) else None
+        self.rmax = bond_search_radius(self.sym)
+        self.heavy_idx = np.array([i for i, x in enumerate(self.sym) if x != "H"], int)
+        self.tree_heavy = cKDTree(self.xyz[self.heavy_idx]) if len(self.heavy_idx) else None
+
+    def rec(self, i):
+        return {"sym": self.sym[i], "label": self.label[i], "occ": float(self.occ[i]),
+                "frac": self.frac[i].copy(), "xyz": self.xyz[i].copy(), "cell": self.cell[i]}
+
+    def nearest_heavy(self, xyz):
+        """Block index of the heavy atom nearest xyz (None if there is none)."""
+        if self.tree_heavy is None:
+            return None
+        return int(self.heavy_idx[self.tree_heavy.query(xyz)[1]])
+
+    def neighbours(self, xyz, r):
+        """Sorted block indices within r of xyz (ascending = the old loop order)."""
+        if self.tree is None:
+            return []
+        return sorted(self.tree.query_ball_point(xyz, r))
+
+    def bonded_to(self, atom, alt=None):
+        """Sorted block indices covalently bonded to `atom` (a dict with sym/xyz/occ/label),
+        by is_bonded — the vectorised inner loop of every molecule-growing search."""
+        out = []
+        for j in self.neighbours(atom["xyz"], self.rmax):
+            d = float(np.linalg.norm(atom["xyz"] - self.xyz[j]))
+            if is_bonded(atom["sym"], self.sym[j], d, atom["occ"], self.occ[j],
+                         atom["label"], self.label[j], alt):
+                out.append(j)
+        return out
+
+
+def supercell(struct, lo=(-1, -1, -1), hi=(1, 1, 1)):
+    """Cached Supercell of lattice images lo..hi (default the 3x3x3 block around the cell)."""
+    key = (tuple(int(v) for v in lo), tuple(int(v) for v in hi))
+    if key not in struct._sup:
+        struct._sup[key] = Supercell(struct, *key)
+    return struct._sup[key]
 
 
 def special_positions(struct):
@@ -426,11 +589,12 @@ def disorder_alternatives(struct):
             alt[la].add(lb); alt[lb].add(la)
 
     sub = [a for a in struct.atoms if a["occ"] < 0.999]
+    sxyz = [struct.cart(a["frac"]) for a in sub]
     for i in range(len(sub)):
         for j in range(i + 1, len(sub)):
             if sub[i]["sym"] != sub[j]["sym"]:
                 continue
-            if float(np.linalg.norm(struct.cart(sub[i]["frac"]) - struct.cart(sub[j]["frac"]))) < DISORDER_MIN:
+            if float(np.linalg.norm(sxyz[i] - sxyz[j])) < DISORDER_MIN:
                 link(sub[i]["label"], sub[j]["label"])
 
     tagged = [a for a in struct.atoms if a.get("dis_grp") not in (None, ".", "", "?")]
@@ -457,19 +621,17 @@ def bonds(struct, cfg):
     """Covalent bonds within the cell, DISORDER-AWARE: two sub-unity sites closer than
     DISORDER_MIN are alternative positions, not bonded (else naive perception invents
     0.5 A 'bonds'). Returns list of (i, j, dist) index pairs into expand(struct)."""
-    atoms = expand(struct)
+    from scipy.spatial import cKDTree
+    atoms = cell_atoms(struct)
     alt = disorder_alternatives(struct)
-    xyz = [struct.cart(u["frac"]) for u in atoms]
+    if not atoms:
+        return []
+    xyz = np.array([a["xyz"] for a in atoms], float)
     out = []
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            dd = float(np.linalg.norm(xyz[i] - xyz[j]))
-            if dd <= 0.4 or dd > _covsum(atoms[i]["sym"], atoms[j]["sym"]) + BOND_TOL:
-                continue
-            if atoms[i]["occ"] < 1 and atoms[j]["occ"] < 1 and dd < DISORDER_MIN:
-                continue                                  # mutually-exclusive disorder (near-coincident)
-            if atoms[j]["label"] in alt.get(atoms[i]["label"], set()):
-                continue                                  # disorder alternative (incl. group-tagged)
+    for i, j in sorted(cKDTree(xyz).query_pairs(r=bond_search_radius(a["sym"] for a in atoms))):
+        dd = float(np.linalg.norm(xyz[i] - xyz[j]))
+        if is_bonded(atoms[i]["sym"], atoms[j]["sym"], dd, atoms[i]["occ"], atoms[j]["occ"],
+                     atoms[i]["label"], atoms[j]["label"], alt):
             out.append((i, j, round(dd, 3)))
     return out
 
@@ -498,37 +660,20 @@ def geometry(struct, cfg):
     radii ±0.25 A). This is a COARSE sanity bound, NOT a Mogul/CSD percentile (Mogul is
     licensed/unavailable — don't overclaim distributional rigour). Disorder-aware; bonds are
     deduped to unique (label-pair, length) types over the cell + nearest neighbours."""
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
     alt = disorder_alternatives(struct)
-    origin = struct.cart(np.zeros(3))
-    sup = []
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    sup.append({"sym": a["sym"], "label": a["label"], "occ": a["occ"],
-                                "xyz": a["xyz"] + shift})
+    sup = supercell(struct)
     rows, seen, n_out = [], set(), 0
-    for a in cell_atoms:
-        for b in sup:
-            dd = float(np.linalg.norm(a["xyz"] - b["xyz"]))
-            if dd <= 0.4:
-                continue
-            cs = _covsum(a["sym"], b["sym"])
-            if dd > cs + BOND_TOL:
-                continue
-            if a["occ"] < 1 and b["occ"] < 1 and dd < DISORDER_MIN:
-                continue                                          # mutually-exclusive disorder (near-coincident)
-            if b["label"] in alt.get(a["label"], set()):
-                continue                                          # disorder alternative (incl. group-tagged)
-            key = tuple(sorted([a["label"], b["label"]]) + [round(dd, 2)])
+    for a in cell_atoms(struct):
+        for j in sup.bonded_to(a, alt):
+            dd = float(np.linalg.norm(a["xyz"] - sup.xyz[j]))
+            cs = _covsum(a["sym"], sup.sym[j])
+            key = tuple(sorted([a["label"], sup.label[j]]) + [round(dd, 2)])
             if key in seen:
                 continue
             seen.add(key)
             outlier = abs(dd - cs) > GEOM_OUTLIER
             n_out += int(outlier)
-            rows.append({"a": a["label"], "b": b["label"], "len": round(dd, 3),
+            rows.append({"a": a["label"], "b": sup.label[j], "len": round(dd, 3),
                          "covsum": round(cs, 3), "outlier": outlier})
     f = [("INFO", f"Block B: {len(rows)} unique bonds, {n_out} outside the covalent envelope "
                   f"(±{GEOM_OUTLIER} A; coarse bound, not Mogul)")]
@@ -590,9 +735,7 @@ def hbonds(struct, cfg):
     classified by D...A (Jeffrey). Donor/acceptor sets are separate (cfg). Sub-floor
     contacts are demoted, not reported as H-bonds. Cross-checks the CIF's _geom_hbond
     loop on D...A (normalization-invariant) where present."""
-    g = _gemmi()
-    donors = set(cfg.hbond_donors) | ({"C"} if cfg.hbond_weak else set())
-    acceptors = set(cfg.hbond_acceptors)
+    donors, acceptors = hbond_sets(cfg)
     floor = cfg.hbond_angle_min
     alt = disorder_alternatives(struct)
     dis_pairs = set()
@@ -601,62 +744,42 @@ def hbonds(struct, cfg):
         f.append(("INFO", "weak donors enabled but angle floor still 120 deg — most weak "
                           "H-bonds are bent; consider lowering hbond_angle_min toward 90"))
 
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
-    Hs = [a for a in cell_atoms if a["sym"] == "H"]
-
-    # 3x3x3 supercell of HEAVY atoms: the donor search must see molecules that straddle
-    # the cell boundary (not just the [0,1) image, or O-H donors on a boundary-spanning
-    # molecule are missed) + the acceptor subset for the contact search.
-    sup_heavy, sup_acc = [], []
-    origin = struct.cart(np.zeros(3))
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    if a["sym"] == "H":
-                        continue
-                    rec = {"sym": a["sym"], "label": a["label"], "cell": (di, dj, dk),
-                           "frac": a["frac"] + np.array([di, dj, dk], float), "xyz": a["xyz"] + shift}
-                    sup_heavy.append(rec)
-                    if a["sym"] in acceptors:
-                        sup_acc.append(rec)
-
+    # 3x3x3 supercell: the donor search must see molecules that straddle the cell boundary
+    # (not just the [0,1) image, or O-H donors on a boundary-spanning molecule are missed);
+    # acceptors are searched within the 4.0 A D...A ceiling of hbond_geometry.
+    sup = supercell(struct)
     results, seen, contacts, seen_c = [], set(), [], set()
-    for h in Hs:
-        if not sup_heavy:
+    for h in (a for a in cell_atoms(struct) if a["sym"] == "H"):
+        k = sup.nearest_heavy(h["xyz"])
+        if k is None:
             break
-        D = min(sup_heavy, key=lambda a: np.linalg.norm(a["xyz"] - h["xyz"]))
-        dDH = float(np.linalg.norm(D["xyz"] - h["xyz"]))
-        if dDH > _covsum(D["sym"], "H") + BOND_TOL or D["sym"] not in donors:
-            continue
-        hpos = h["xyz"]
-        if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
-            hpos = D["xyz"] + (h["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
-        altD = alt.get(D["label"], set())
-        for A in sup_acc:
-            DA = float(np.linalg.norm(A["xyz"] - D["xyz"]))
-            if DA < 0.4 or DA > 4.0:
+        D = sup.rec(k)
+        if D["sym"] not in donors or \
+                float(np.linalg.norm(D["xyz"] - h["xyz"])) > _covsum(D["sym"], "H") + BOND_TOL:
+            continue                                      # not a donor, or H not bonded to its nearest heavy atom
+        for j in sup.neighbours(D["xyz"], 4.0):
+            if sup.sym[j] not in acceptors:
                 continue
-            if A["label"] in altD:                        # acceptor is a disorder-alternative of the donor
+            A = sup.rec(j)
+            geo = hbond_geometry(D, h, A, cfg, alt, donors, acceptors)
+            if geo is None:
+                continue
+            if geo["kind"] == "disorder":                 # acceptor is a disorder-alternative of the donor
                 dis_pairs.add((D["label"], A["label"]))
                 continue
-            HA = float(np.linalg.norm(A["xyz"] - hpos))
-            if HA > _vdw("H") + _vdw(A["sym"]):
+            if geo["kind"] in ("far", "bent"):
                 continue
-            ang = _angle(D["xyz"], hpos, A["xyz"])
             rec = {"D": D["label"], "Dsym": D["sym"], "H": h["label"],
-                   "A": A["label"], "Asym": A["sym"], "DH": round(dDH, 3),
-                   "HA": round(HA, 3), "DA": round(DA, 3), "angle": round(ang, 1),
-                   "class": next((k for lo, hi, k in JEFFREY if lo <= DA < hi), "long"),
+                   "A": A["label"], "Asym": A["sym"], "DH": round(geo["DH"], 3),
+                   "HA": round(geo["HA"], 3), "DA": round(geo["DA"], 3), "angle": round(geo["angle"], 1),
+                   "class": next((c for lo, hi, c in JEFFREY if lo <= geo["DA"] < hi), "long"),
                    "sym": _sym_code(struct, A["label"], A["frac"]), "cell": A["cell"]}
-            if ang < floor:                               # below the floor: geometric contact, not an asserted H-bond
-                if ang >= GEOM_CONTACT_MIN:
-                    ck = (D["label"], h["label"], A["label"], round(DA, 2))
-                    if ck not in seen_c:
-                        seen_c.add(ck); rec["class"] = "contact"; contacts.append(rec)
+            if geo["kind"] == "contact":                  # below the floor: geometric contact, not an asserted H-bond
+                ck = (D["label"], h["label"], A["label"], round(geo["DA"], 2))
+                if ck not in seen_c:
+                    seen_c.add(ck); rec["class"] = "contact"; contacts.append(rec)
                 continue
-            key = (D["label"], h["label"], A["label"], round(DA, 2))
+            key = (D["label"], h["label"], A["label"], round(geo["DA"], 2))
             if key in seen:
                 continue
             seen.add(key)
@@ -685,7 +808,7 @@ def hbonds(struct, cfg):
     f.insert(0, ("INFO", f"{len(results)} H-bonds + {len(contacts)} geometric contacts "
                          f"(donors={sorted(donors)}, acceptors={sorted(acceptors)}, floor={floor:.0f} deg)"))
     verify._resolve(f, cfg, "hbonds")
-    return {"bonds": results, "contacts": contacts, "xref": xref}
+    return {"bonds": results, "contacts": contacts, "xref": xref, "suppressed": sorted(dis_pairs)}
 
 
 # --------------------------------------------------------------------- validate + table

@@ -363,9 +363,9 @@ def integrate_bands(x, y, cfg):
     x = np.asarray(x, float); y = np.asarray(y, float)
     o = np.argsort(x, kind="stable")                 # a descending export (raw .spc: 4000 -> 650) would
     x, y = x[o], y[o]                                # flip the trapezoid sign and break np.interp
-    half = 2.0 if getattr(cfg, "domain", "ftir") == "ftir" else 0.0   # anchor averaging window (x units)
+    half = 2.0 if cfg.domain == "ftir" else 0.0     # anchor averaging window (x units)
     windows = cfg.integration_windows
-    mode = getattr(cfg, "integration_baseline", "per_window")
+    mode = cfg.integration_baseline
 
     # shared mode draws the baseline once, across the union of all windows
     env = None
@@ -457,7 +457,7 @@ def plot_waterfall(groups, cfg, offset=None):
             ax.axvline(tt, color="0.6", lw=0.5, ls=":")
     _apply_axis(ax, cfg)
     ax.set_yticks([])                          # offsets are arbitrary; hide the y scale
-    mode = getattr(cfg, "waterfall_legend", "edge")
+    mode = cfg.waterfall_legend
     if len(groups) > 1 and mode == "legend":
         ax.legend(loc="best")
     elif len(groups) > 1 and mode == "edge":

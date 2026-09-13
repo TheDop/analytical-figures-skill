@@ -237,15 +237,12 @@ one of them skips cleanly when it is absent.
 
 ## Known limitations
 
-- The 3D structure views re-implement the hydrogen-bond and bond criteria of `crystal_engine`
-  rather than calling them, and the figure path does not apply the engine's disorder-alternative
-  exclusion, so on a structure with disordered donor/acceptor sites a dashed contact can appear in
-  the view that the validation table suppresses. Read the table as the authority.
-- The crystal family is written for small-molecule cells: bond, geometry and H-bond searches are
-  all-pairs Python loops and the realistic-pattern profile is summed reflection by reflection, so a
-  cell with hundreds of atoms takes seconds per figure, not milliseconds.
-- The chemometrics component scan refits from scratch for every component count and
-  `permutation_test` re-preprocesses the folds for every permutation; correct, but slow on large sets.
+- The crystal family is written for small-molecule cells. Bond, geometry and H-bond searches use a
+  KD-tree on a cached supercell, but the first calculated pattern per structure still parses the CIF
+  and computes structure factors (seconds for a few hundred atoms); later calls reuse the cache.
+- The realistic PXRD profile evaluates each reflection within ±40 FWHM of its centre (`window_fwhm`);
+  the discarded Lorentzian tail is below counting quantisation on lab patterns, and `window_fwhm=None`
+  restores the exact full-grid sum.
 - `audit_layout` is a set of heuristics (tick overlap, clipping, letters, unit cues). It catches the
   common faults; reading the saved PNG is still part of the workflow, not a formality.
 

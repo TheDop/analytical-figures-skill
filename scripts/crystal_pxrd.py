@@ -8,7 +8,14 @@ setup_scatter), and peak_width is in Q (A^-1), NOT degrees. Cross-checked agains
 (or a Bragg-law fallback). Validated in skill_validation/dans_fix.py (ELAINM: 47 peaks,
 Dans vs pymatgen top peak 0.011 deg).
 
+The Dans crystal, its powder computation (structure factors) and the pymatgen cross-check are
+cached ON THE STRUCTURE, keyed by every parameter that changes the result (CIF path, wavelength,
+2theta window, peak width, Lorentz fraction), so calc_pattern / reflection_list / peak_table /
+realistic_pattern / plot_overlay_patterns parse and compute each once per (struct, settings).
+
     calc_pattern(struct, cfg)             -> {two_theta, intensity, wavelength, peaks}
+    reflection_list(struct, cfg)          -> [(2theta, I, (h,k,l)), ...] real structure factors
+    realistic_pattern(struct, cfg)        -> Kalpha2 / PO / Caglioti on top of reflection_list
     plot(struct, cfg, experimental=None)  -> (fig, ax, pattern)   via spectra pxrd axis
 """
 from __future__ import annotations
@@ -25,6 +32,65 @@ def _wavelength(struct, cfg):
     if wl:
         return float(wl), "CIF"
     return 1.5406, "fallback Cu-Ka1 (CIF declared none)"
+
+
+def _dans():
+    try:
+        import Dans_Diffraction as dif
+    except ImportError as e:
+        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
+                          "    python -m pip install Dans-Diffraction") from e
+    return dif
+
+
+def _dans_crystal(struct, cfg):
+    """dif.Crystal(cfg.cif_path), parsed once per structure (cached on struct, keyed by path)."""
+    key = ("dans", cfg.cif_path)
+    if key not in struct._pxrd:
+        struct._pxrd[key] = _dans().Crystal(cfg.cif_path)
+    return struct._pxrd[key]
+
+
+def _powder(struct, cfg):
+    """Dans powder computation at the cfg settings — (two_theta, raw intensity, reflection
+    array), each computed ONCE per (CIF, wavelength, window, peak width, Lorentz fraction) and
+    cached on struct. Returns copies, so callers may normalise in place."""
+    wl, src = _wavelength(struct, cfg)
+    key = ("powder", cfg.cif_path, wl, float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max),
+           float(cfg.pxrd_peak_width), float(cfg.pxrd_lorentz_fraction))
+    if key not in struct._pxrd:
+        xtl = _dans_crystal(struct, cfg)
+        xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl,
+                                  powder_units="twotheta",
+                                  min_twotheta=cfg.pxrd_two_theta_min,
+                                  max_twotheta=cfg.pxrd_two_theta_max,
+                                  powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
+        # peak_width is in Q (A^-1), NOT degrees; min_twotheta keeps the (000) at 0 off-grid
+        tt, inten, refl = xtl.Scatter.powder("xray", units="tth",
+                                             peak_width=cfg.pxrd_peak_width,
+                                             lorentz_fraction=cfg.pxrd_lorentz_fraction)
+        struct._pxrd[key] = (np.asarray(tt, float), np.asarray(inten, float), np.asarray(refl, float))
+    tt, inten, refl = struct._pxrd[key]
+    return tt.copy(), inten.copy(), refl, wl, src
+
+
+def _pymatgen_top(struct, cfg, wl):
+    """2theta of pymatgen's strongest reflection, once per (CIF, wavelength, window); None when
+    pymatgen is absent or fails (the caller falls back to the Bragg-law check)."""
+    key = ("pmg", cfg.cif_path, wl, float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max))
+    if key not in struct._pxrd:
+        other = None
+        try:
+            from pymatgen.core import Structure as PMG
+            from pymatgen.analysis.diffraction.xrd import XRDCalculator
+            st = PMG.from_file(cfg.cif_path)
+            pat = XRDCalculator(wavelength=wl).get_pattern(
+                st, two_theta_range=(cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max))
+            other = float(pat.x[int(np.argmax(pat.y))])
+        except Exception:
+            pass
+        struct._pxrd[key] = other
+    return struct._pxrd[key]
 
 
 def _find_peaks(tt, inten, height=2.0, distance=5):
@@ -74,23 +140,7 @@ def _bragg_nearest(struct, wl, tth, hmax=5):
 def calc_pattern(struct, cfg):
     """Dans_Diffraction powder pattern, (000) off-grid, at the declared wavelength.
     Gates the calc/cross-check agreement per cfg.pxrd_crosscheck."""
-    try:
-        import Dans_Diffraction as dif
-    except ImportError as e:
-        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
-                          "    python -m pip install Dans-Diffraction") from e
-    wl, src = _wavelength(struct, cfg)
-    xtl = dif.Crystal(cfg.cif_path)
-    xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl,
-                              powder_units="twotheta",
-                              min_twotheta=cfg.pxrd_two_theta_min,
-                              max_twotheta=cfg.pxrd_two_theta_max,
-                              powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
-    # peak_width is in Q (A^-1), NOT degrees; min_twotheta keeps the (000) at 0 off-grid
-    tt, inten, _ = xtl.Scatter.powder("xray", units="tth",
-                                      peak_width=cfg.pxrd_peak_width,
-                                      lorentz_fraction=cfg.pxrd_lorentz_fraction)
-    tt, inten = np.asarray(tt, float), np.asarray(inten, float)
+    tt, inten, _, wl, src = _powder(struct, cfg)
     if inten.size and inten.max() > 0:
         inten = inten / inten.max() * 100.0
     peaks = _find_peaks(tt, inten)
@@ -105,16 +155,9 @@ def calc_pattern(struct, cfg):
     if mode != "none" and not math.isnan(top):
         delta = method = other = None
         if mode in ("auto", "pymatgen"):
-            try:
-                from pymatgen.core import Structure as PMG
-                from pymatgen.analysis.diffraction.xrd import XRDCalculator
-                st = PMG.from_file(cfg.cif_path)
-                pat = XRDCalculator(wavelength=wl).get_pattern(
-                    st, two_theta_range=(cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max))
-                other = float(pat.x[int(np.argmax(pat.y))])
+            other = _pymatgen_top(struct, cfg, wl)
+            if other is not None:
                 delta, method = abs(top - other), "pymatgen"
-            except Exception:
-                pass
         if delta is None and mode in ("auto", "bragg"):
             gap = _bragg_nearest(struct, wl, top)
             if gap is not None:
@@ -134,19 +177,7 @@ def reflection_list(struct, cfg):
     already applied (Dans's `powder()` 3rd return: columns h,k,l,2theta,intensity, grouped by
     min_overlap). This is the correct input to `pxrd_realism.simulate_pattern` (feed it THESE, not
     the post-broadened peak list — that would double-broaden). Filtered to the cfg 2theta window."""
-    try:
-        import Dans_Diffraction as dif
-    except ImportError as e:
-        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
-                          "    python -m pip install Dans-Diffraction") from e
-    wl, _ = _wavelength(struct, cfg)
-    xtl = dif.Crystal(cfg.cif_path)
-    xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl, powder_units="twotheta",
-                              min_twotheta=cfg.pxrd_two_theta_min, max_twotheta=cfg.pxrd_two_theta_max,
-                              powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
-    _, _, refl = xtl.Scatter.powder("xray", units="tth", peak_width=cfg.pxrd_peak_width,
-                                    lorentz_fraction=cfg.pxrd_lorentz_fraction)
-    refl = np.asarray(refl, float)
+    _, _, refl, _wl, _src = _powder(struct, cfg)
     lo, hi = cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max
     out = []
     for h, k, l, tth, I in refl:

@@ -10,7 +10,9 @@ intensities that seed the list; see `crystal.md` for wiring):
   march_dollase   preferred-orientation INTENSITY correction (platy / needle habit)
   kalpha2_doublet Cu Kα1/Kα2 peak SPLITTING (α2 at ~half intensity; splitting grows with angle)
   caglioti_fwhm + pseudo_voigt   angle-dependent peak WIDTH and shape
-  simulate_pattern  composes them onto a 2θ grid (defaults pulled from cfg)
+  simulate_pattern  composes them onto a 2θ grid (defaults pulled from cfg); each peak is
+                    evaluated only on a ±`window_fwhm` FWHM slice of the grid (searchsorted),
+                    so a refinement loop calling it hundreds of times stays cheap
 
 Nothing here computes structure factors or systematic absences — feed it real reflection
 intensities. Preferred orientation is the per-reflection-orientation form; a fully rigorous PO
@@ -24,6 +26,8 @@ import numpy as np
 CU_KA1 = 1.540598
 CU_KA2 = 1.544426
 CU_KA2_RATIO = 0.5
+# Per-peak evaluation half-width for simulate_pattern, in FWHM units (see its docstring).
+DEFAULT_WINDOW_FWHM = 40.0
 
 
 def reciprocal_metric(a, b, c, al, be, ga):
@@ -102,20 +106,36 @@ def pseudo_voigt(x, center, fwhm, eta):
 
 
 def _pick(cfg, name, default, override):
+    """Keyword override > declared cfg field > module default. `cfg` is optional here (the
+    validation suite calls with cfg=None); when given it is a Config, so the field is read
+    directly — a misspelt name fails loudly instead of silently taking the default."""
     if override is not None:
         return override
-    return getattr(cfg, name, default) if cfg is not None else default
+    return getattr(cfg, name) if cfg is not None else default
 
 
 def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, eta=None,
                      kalpha2=None, lam1=CU_KA1, lam2=None, ratio=None,
-                     po_hkl=None, march_r=None, Gs=None, normalize=True):
+                     po_hkl=None, march_r=None, Gs=None, normalize=True,
+                     window_fwhm=DEFAULT_WINDOW_FWHM):
     """Build a realistic profile on `x_grid` (2θ deg) from a reflection list. Pipeline:
     March-Dollase (if po_hkl and r≠1 and Gs given) → Kα2 doublet (if kalpha2) → sum of
     area-normalized pseudo-Voigts with Caglioti(θ) widths. Unspecified parameters default from
     `cfg` (pxrd_caglioti → U,V,W; pxrd_lorentz_fraction → eta; pxrd_kalpha2 / pxrd_wavelength2 /
     pxrd_kalpha2_ratio; pxrd_po_axis → po_hkl; pxrd_march_r). Returns the intensity on `x_grid`
-    (scaled to 100 at the max when `normalize`)."""
+    (scaled to 100 at the max when `normalize`).
+
+    `window_fwhm`: each reflection is evaluated only on the grid slice within ±window_fwhm·FWHM
+    of its centre (np.searchsorted on the sorted grid), not on the whole grid. None = full grid
+    (the exact sum). The truncated part is the far Lorentzian tail, area fraction
+    η·(1 − (2/π)·arctan(2·window_fwhm)) per peak — 0.40 % at the default 40 FWHM with η=0.5
+    (0.80 % for a pure Lorentzian). It is DROPPED, not renormalised: renormalising would raise
+    every on-grid value of the peak by that fraction and change peak heights, whereas dropping
+    leaves each peak bit-identical inside its window and only removes the smooth far-tail
+    pedestal that other peaks contribute at its position — a background-like term. Measured on a
+    real 328-line Cu Kα1/α2 aspirin list (3000-point 5–50° grid): max deviation from the full sum
+    1.8e-4 of the pattern maximum (2.6e-3 relative on peaks >5 % of max), below the ~1e-3
+    quantisation of a counted lab pattern; ±10 FWHM would already cost 2 % on weak peaks."""
     uvw = _pick(cfg, "pxrd_caglioti", (0.01, -0.005, 0.008), None)
     U = uvw[0] if U is None else U
     V = uvw[1] if V is None else V
@@ -126,7 +146,7 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
     ratio = _pick(cfg, "pxrd_kalpha2_ratio", CU_KA2_RATIO, ratio)
     po_hkl = _pick(cfg, "pxrd_po_axis", None, po_hkl)
     march_r = _pick(cfg, "pxrd_march_r", 1.0, march_r)
-    if cfg is not None and lam1 == CU_KA1 and getattr(cfg, "pxrd_wavelength", None):
+    if cfg is not None and lam1 == CU_KA1 and cfg.pxrd_wavelength:
         lam1 = float(cfg.pxrd_wavelength)           # the α1 the reflection list was computed at
     if kalpha2 and abs(lam1 - CU_KA1) > 1e-3 and lam2 == CU_KA2:
         print(f"  [WARN] pxrd_realism: Kα2 doublet uses the Cu Kα2 line ({CU_KA2} Å) on an α1 of {lam1} Å - "
@@ -143,8 +163,19 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
 
     x = np.asarray(x_grid, float)
     y = np.zeros_like(x)
-    for tth, I, _hkl in refl:
-        y = y + I * pseudo_voigt(x, tth, float(caglioti_fwhm(tth, U, V, W)), eta)
+    if window_fwhm is None or x.size == 0:
+        for tth, I, _hkl in refl:
+            y = y + I * pseudo_voigt(x, tth, float(caglioti_fwhm(tth, U, V, W)), eta)
+    else:
+        order = np.argsort(x, kind="stable")      # searchsorted needs an ascending grid
+        xs = x[order]
+        ys = np.zeros_like(xs)
+        for tth, I, _hkl in refl:
+            fw = float(caglioti_fwhm(tth, U, V, W))
+            i0, i1 = np.searchsorted(xs, (tth - window_fwhm * fw, tth + window_fwhm * fw))
+            if i1 > i0:
+                ys[i0:i1] += I * pseudo_voigt(xs[i0:i1], tth, fw, eta)
+        y[order] = ys
     if normalize and y.max() > 0:
         y = y / y.max() * 100.0
     return y

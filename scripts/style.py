@@ -9,12 +9,20 @@ Three jobs, all about consistency rather than "how to use matplotlib":
 
 Degrades gracefully: if scienceplots is absent it falls back to a built-in
 preset that encodes the same intent (no LaTeX requirement).
+
+pyplot is imported on FIRST USE (`_plt()`), not at module load: `spectra`, `verify`,
+`calibration` and `charts` import this module, so a CSV-only standalone or `cli.py` would
+otherwise pay the ~0.3 s matplotlib import for numbers that never reach a figure.
 """
 from __future__ import annotations
 import os
-import matplotlib
-import matplotlib.pyplot as plt
 from .config import SKILL_VERSION   # dropped when bundled; then resolves to the inlined global
+
+
+def _plt():
+    """matplotlib.pyplot, imported lazily (see the module docstring)."""
+    import matplotlib.pyplot as plt
+    return plt
 
 # Okabe-Ito: colour-blind safe. Order chosen so the first few are maximally distinct.
 OKABE_ITO = ["#000000", "#E69F00", "#56B4E9", "#009E73",
@@ -61,7 +69,7 @@ def _main_rc(cfg):
     pal = _palette(cfg)
     # redundant encoding so grayscale still separates overlaid traces. The CHANNEL depends on
     # cfg.redundancy: dashes for smooth data, sparse markers for choppy data, or none.
-    red = getattr(cfg, "redundancy", "none")   # house default: spectra solid unless opted out
+    red = cfg.redundancy                        # house default "none": spectra solid unless opted out
     line_extra = {}
     if red == "marker":
         marks = ["o", "s", "^", "D", "v", "P", "X", "*"]
@@ -93,6 +101,7 @@ def _main_rc(cfg):
 def apply_style(cfg):
     """Install the house style. Call once before plotting."""
     # Prefer scienceplots' no-latex style; fall back to the hand-rolled preset.
+    plt = _plt()
     try:
         import warnings
         with warnings.catch_warnings():
@@ -124,7 +133,7 @@ def figure(cfg, nrows=1, ncols=1, height=None, height_ratios=None,
         gridspec_kw["height_ratios"] = height_ratios
     if width_ratios:
         gridspec_kw["width_ratios"] = width_ratios
-    fig, axes = plt.subplots(nrows, ncols, figsize=(w, h),
+    fig, axes = _plt().subplots(nrows, ncols, figsize=(w, h),
                              gridspec_kw=gridspec_kw or None, **kw)
     return fig, axes
 
@@ -138,8 +147,9 @@ def _figure_metadata(cfg, extra=None):
     matplotlib's default 'Software'/date tEXt on PNG, which makes the raster proof
     byte-reproducible."""
     import sys
-    desc = (getattr(cfg, "description", "") or "").strip()
+    desc = (cfg.description or "").strip()
     ver = f"analytical-figures v{SKILL_VERSION}"
+    import matplotlib
     soft = f"{ver}; matplotlib {matplotlib.__version__}; python {sys.version.split()[0]}"
     pdf = {"Creator": ver, "Producer": soft}          # PDF/PS: fixed key set
     svg = {"Creator": ver}                            # SVG: Title/Description/Creator
@@ -185,8 +195,8 @@ def check_figure_width(fig, cfg=None, journal=None, column=None, tol_mm=0.5):
     submission-ready and won't be silently rescaled (rescaling shrinks the pt fonts). Returns
     (ok, message); journals quote widths in mm so the message is in mm. journal/column default
     from cfg. (ACS Anal. Chem. single 3.33 in / double 7.0 in; Nature 89 / 183 mm.)"""
-    journal = journal or getattr(cfg, "journal", "general")
-    column = column or getattr(cfg, "column", "single")
+    journal = journal or (cfg.journal if cfg is not None else "general")
+    column = column or (cfg.column if cfg is not None else "single")
     spec = _WIDTHS.get(journal, _WIDTHS["general"])
     want_in = spec.get(column, spec["single"])
     got_in = float(fig.get_size_inches()[0])
@@ -356,13 +366,13 @@ def add_panel_labels(fig, cfg=None, axes=None, labels=None, style=None,
         x_offset_pt = _auto_x_offset(fig, axs)
     if labels is None:
         if style is None:
-            style = getattr(cfg, "journal", "general") if cfg else "general"
+            style = cfg.journal if cfg is not None else "general"
         fmt = _PANEL_FMT.get(style, _PANEL_FMT["general"])
         labels = [fmt(s) for s in _letter_sequence(len(axs))]
     elif len(labels) < len(axs):
         raise ValueError(f"{len(labels)} labels for {len(axs)} panels")
     if fontsize is None:
-        fontsize = plt.rcParams.get("axes.labelsize", 9)
+        fontsize = _plt().rcParams.get("axes.labelsize", 9)
     placed = []
     for ax, lab in zip(axs, labels):
         t = ax.annotate(lab, xy=(0, 1), xycoords="axes fraction",
@@ -388,7 +398,7 @@ def panel_letter(ax, label, loc="upper left", pad=0.04, fontsize=None,
     NB audit_layout's one-letter-per-panel check assumes a flat grid and will
     over-count a nested/sectioned figure -- confirm the lettering by reading the PNG."""
     if fontsize is None:
-        fontsize = plt.rcParams.get("axes.labelsize", 9)
+        fontsize = _plt().rcParams.get("axes.labelsize", 9)
     va = "top" if "upper" in loc else "bottom"
     ha = "right" if "right" in loc else "left"
     x = (1 - pad) if ha == "right" else pad

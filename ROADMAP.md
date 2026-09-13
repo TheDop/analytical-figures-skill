@@ -323,27 +323,40 @@ in both domains; `integrate_bands` now anchors on the same averaged anchor value
 Dropped as low value: `chemometrics._CYCLE` ignores `cfg.palette`; `diagnostics_figure`
 rasterises five times; `_check_xy` prints per permutation; `choose_n_components` on a NaN-first scan.
 
-Deferred (real, larger):
+Deferred then (all seven closed 2026-09-13, pre-release cleanup; each verified by a before/after
+measurement, not by reading the diff):
 
-- **One H-bond / bond predicate.** `crystal_view._hbond_pairs` / `_hbond_env_atoms` and the bond
-  predicate copied across `crystal_engine.bonds` / `geometry` / `crystal_view.complete_molecules` /
-  `_bond_pairs` / `_components` re-implement the engine's criteria and omit its disorder-alternative
-  exclusion → a figure can draw a contact the table suppresses. Expose `crystal_engine.is_hbond` /
-  `is_bonded` and call them everywhere (the module's stated invariant).
-- **Vectorise the crystal geometry.** All-pairs Python loops with `np.linalg.norm` per pair and two
-  gemmi `Element` constructions per pair; cart coords + the 27-image supercell rebuilt per helper.
-  `cKDTree.query_pairs` / `query_ball_point` on a cached supercell, a covalent-radius dict, and
-  `_hbond_pairs` computed once per render → seconds to tens of milliseconds.
-- **`simulate_pattern` per-peak windows** (`searchsorted` ±10 FWHM) instead of a full-grid
-  pseudo-Voigt per reflection; matters once cell refinement loops call it hundreds of times.
-- **Cache the Dans structure / reflection list on `Structure`** so `calc_pattern`, `peak_table`,
-  `realistic_pattern` and `plot_overlay` stop re-parsing the CIF and recomputing identical
-  structure factors; run the pymatgen cross-check once per (cif, λ, window).
-- **Nested-component PLS scan**: one fit at the cap per fold, predictions for a = 1..cap by
-  truncation; cache per-fold preprocessed X across permutations in `permutation_test`.
-- **Lazy pyplot** in `style` so `cli.py` and CSV-only standalones don't pay the matplotlib import.
-- **Stop probing declared cfg fields with `getattr(cfg, name, default)`** — a dataclass field is
-  safe to access directly and a misspelt field should fail loudly.
+- **One H-bond / bond predicate — DONE.** `crystal_engine.is_bonded` / `hbond_geometry` / `is_hbond`
+  are the single copies of the criteria (radii + tolerance, near-coincident partial sites, labelled
+  disorder alternatives, donor/acceptor sets, X-H normalisation, vdW ceiling, angle band); the
+  engine's `bonds`/`geometry`/`hbonds` and every `crystal_view` helper call them. `hbonds()` now also
+  returns the suppressed donor/own-alternative pairs, and a test pins view H-bonds ⊆ table on both
+  flufenamic disorder CIFs (no shipped CIF exercised the old discrepancy, so a synthetic disorder
+  case pins the predicate itself).
+- **Vectorised crystal geometry — DONE.** A cached `Supercell` (cart coords + `cKDTree`, heavy-atom
+  tree) with memoised radii; KD-tree candidate sets, exact predicate after; H-bond pairs computed once
+  per render. Snapshot over the 9 COD CIFs: 0 differences in any geometric/H-bond/cluster line;
+  wall-clock 952 s → 68 s (`_hbond_env_atoms` 725 s → 0.4 s; the rest is Dans/pymatgen first-compute).
+- **`simulate_pattern` per-peak windows — DONE.** `window_fwhm` (default ±40 FWHM via
+  `searchsorted`; `None` = the old full-grid sum, bit-identical). Dropped tail = η·(1−(2/π)·arctan(2w))
+  of each peak's area (0.4 % at w=40, η=0.5); measured max deviation on a 328-line Cu Kα1/α2 aspirin
+  pattern 1.8e-4 of the maximum, below counting quantisation. 2.5–5× faster.
+- **Dans structure / reflection list cached on `Structure` — DONE.** One `dif.Crystal` per struct,
+  one powder computation per (CIF, λ, window, width, Lorentz), one pymatgen cross-check per
+  (CIF, λ, window); `calc_pattern`, `reflection_list`, `peak_table`, `realistic_pattern`,
+  `plot_overlay_patterns` share them (second `calc_pattern` 9.7 s → 2 ms; arrays byte-identical).
+- **Nested-component PLS/PCR scan — DONE.** One fit at the cap per fold, predictions for a = 1..cap by
+  truncation (identity checked against fresh a-component sklearn fits to ≤ 3e-15 before use; the
+  from-scratch path stays as the reference behind `_nested=False`). RMSECV agrees to 1e-10 on the
+  real pectin set; 3–10× faster. `permutation_test` caches the per-fold preprocessed blocks when the
+  folds are y-independent (groups or LOO); the level-stratified k-fold without groups derives folds
+  from y and is rebuilt per draw. Null distribution bit-identical for a fixed seed.
+- **Lazy pyplot — DONE.** `style` imports pyplot on first use; `from scripts import config, spectra,
+  verify, calibration` no longer loads matplotlib (0.39 s → 0.13 s) and `cli.py calibrate` is
+  pyplot-free. A standalone that bundles charts/chemometrics/crystal_view still loads it at import.
+- **cfg probes — DONE.** All 45 `getattr(cfg, name, default)` probes across `scripts/` are direct
+  field accesses; every probed field was already declared in `config.py`, so a misspelt field now
+  fails loudly. Functions that accept `cfg=None` resolve a default once at the top.
 
 ## Suggested sequence
 

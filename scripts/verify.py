@@ -38,12 +38,23 @@ class GateError(RuntimeError):
     """Raised when a FAIL gate trips under cfg.strict."""
 
 
+def _default_cfg(cfg):
+    """The gates that accept cfg=None run on the skill defaults: ONE Config, so every
+    threshold is a declared field (a misspelt one fails loudly) instead of a per-call
+    probe with its own hidden default."""
+    if cfg is None:
+        from . import config
+        cfg = config.Config()
+    return cfg
+
+
 def _resolve(findings, cfg, context=""):
     """Print findings; raise on any FAIL if cfg.strict."""
+    cfg = _default_cfg(cfg)
     worst = max((SEV[s] for s, _ in findings), default=0)
     for sev, msg in findings:
         print(f"  [{sev}] {context}{': ' if context else ''}{msg}")
-    if worst == SEV["FAIL"] and getattr(cfg, "strict", True):
+    if worst == SEV["FAIL"] and cfg.strict:
         fails = "; ".join(m for s, m in findings if s == "FAIL")
         raise GateError(f"{context}: {fails}")
     return findings
@@ -188,7 +199,7 @@ def flag_outliers_mad(values, cfg=None, n_mads=None, name="metric"):
     vf = v[finite]
     n = vf.size
     if n_mads is None:
-        n_mads = getattr(cfg, "outlier_mad_n", 3.5) if cfg is not None else 3.5
+        n_mads = _default_cfg(cfg).outlier_mad_n
     med = float(np.median(vf)) if n else float("nan")
     abs_dev = np.abs(vf - med)
     mad = float(np.median(abs_dev)) if n else float("nan")
@@ -488,9 +499,10 @@ def audit_layout(fig, cfg=None):
     multi-panel figures - that every panel carries exactly one a/b/c letter (place
     them with style.add_panel_labels)."""
     import matplotlib.text as mtext
+    cfg = _default_cfg(cfg)
     f = []
-    tol = getattr(cfg, "tick_overlap_tol_px", 2.0) if cfg else 2.0
-    clip_tol = getattr(cfg, "clip_tol_px", 2.0) if cfg else 2.0
+    tol = cfg.tick_overlap_tol_px
+    clip_tol = cfg.clip_tol_px
     # missing glyphs: intercept the render warning channels (catches tofu with no
     # U+FFFD); this render also realises the text extents used below.
     for g in _glyph_render_warnings(fig)[:2]:
@@ -513,7 +525,7 @@ def audit_layout(fig, cfg=None):
                 f.append(("FAIL", f"missing glyph in '{t.get_text()}' (font lacks the char)"))
         # data escaping the panel: report the worst line only, so a stack that all overflows
         # together gives one actionable message rather than one per trace
-        esc = _escaping_lines(ax, getattr(cfg, "escape_tol_frac", 0.01) if cfg else 0.01)
+        esc = _escaping_lines(ax, cfg.escape_tol_frac)
         if esc:
             frac, n_out, n_vis, lab = max(esc)
             who = lab if lab and not str(lab).startswith("_") else "a trace"

@@ -36,11 +36,14 @@ imports it.
     pcr_fit / pca_fit                     PCR regression / PCA decomposition (same dict shape)
     cross_validate(X, y, nc, cfg, ...)    leakage-safe RMSECV + held-out predictions, scheme NAMED
     component_scan(X, y, cfg, ...)        RMSECV vs components, one curve per preprocessing
+                                          (one fit per fold at the cap, truncated to 1..cap)
     choose_n_components(scan, cfg)        the parsimony pick
     vip(model)                            VIP scores (which wavenumbers drive the model)
     plot_rmsecv / plot_coefficients / plot_scores / plot_loadings   ax-level panels
     diagnostics_figure(X, y, x, cfg, ...) the gated + QA'd 2x2 composite deliverable
     methods_text(model, cv, choice, cfg)  paste-ready methods paragraph
+    permutation_test / corrected_paired_t / rpd / rpiq   the validation trio
+                                          (per-fold preprocessing cached across permutations)
 
 (methods_text, not methods_report — the latter is report.py's name, and the bundler
 flattens every module into one namespace, so module-level names must be unique.)
@@ -295,7 +298,7 @@ def pls_fit(X, y, n_components, cfg, pre=None):
     Xp = pp.fit_transform(X)
     nc = min(n_components, X.shape[0] - 1, Xp.shape[1])
     PLS = _pls_cls()
-    m = PLS(n_components=nc, scale=getattr(cfg, "pls_scale", True)).fit(Xp, y)
+    m = PLS(n_components=nc, scale=cfg.pls_scale).fit(Xp, y)
     coef = _coef_vector(m, Xp.shape[1])
     yhat = np.ravel(m.predict(Xp))
     resid, r2, rmsec = _fit_stats(y, yhat)
@@ -314,7 +317,7 @@ def pca_fit(X, cfg, n_components=None, pre=None):
     _, X, _y = _check_xy(X, np.zeros(X.shape[0]), cfg)
     pp = Preprocessor(pre, cfg)
     Xp = pp.fit_transform(X)
-    nc = n_components or min(getattr(cfg, "pls_max_components", 10), *Xp.shape)
+    nc = n_components or min(cfg.pls_max_components, *Xp.shape)
     nc = int(min(nc, *Xp.shape))            # cap at min(n_samples, n_features) (sklearn's own limit)
     PCA = _pca_cls()
     m = PCA(n_components=nc).fit(Xp)
@@ -359,7 +362,7 @@ def _make_folds(n, y, groups, scheme, cfg):
         folds = [(idx[groups != g], idx[groups == g]) for g in uniq]
         return (folds, f"leave-one-group-out ({len(uniq)} groups)",
                 "predict a NEW group (e.g. an unseen concentration level)")
-    sch = (scheme or getattr(cfg, "cv_scheme", "auto")).lower()
+    sch = (scheme or cfg.cv_scheme).lower()
     if sch in ("auto", "loo"):
         folds = [(idx[idx != i], np.array([i])) for i in idx]
         return (folds, "leave-one-out (per sample)",
@@ -371,7 +374,7 @@ def _make_folds(n, y, groups, scheme, cfg):
         # and the sorted levels are interleaved across folds so every fold spans the response
         # range (contiguous blocks would make the end folds pure extrapolation).
         levels = np.unique(y)
-        k = int(min(getattr(cfg, "cv_folds", 5), len(levels)))
+        k = int(min(cfg.cv_folds, len(levels)))
         parts = [idx[np.isin(y, levels[i::k])] for i in range(k)]
         parts = [p for p in parts if len(p)]
         folds = [(np.setdiff1d(idx, p), p) for p in parts]
@@ -381,30 +384,105 @@ def _make_folds(n, y, groups, scheme, cfg):
 
 
 def _fit_predict(Xtr, ytr, Xte, nc, cfg, method):
+    """One model at `nc` components, from scratch (the reference path; `_fit_predict_nested`
+    is the fast one the scan uses)."""
     nc = int(min(nc, len(Xtr) - 1, Xtr.shape[1]))
     if method == "pls":
-        m = _pls_cls()(n_components=nc, scale=getattr(cfg, "pls_scale", True)).fit(Xtr, ytr)
+        m = _pls_cls()(n_components=nc, scale=cfg.pls_scale).fit(Xtr, ytr)
         return np.ravel(m.predict(Xte))
     if method == "pcr":
-        pca = _pca_cls()(n_components=nc).fit(Xtr)
+        pca = _pca_cls()(n_components=nc, svd_solver="full").fit(Xtr)
         reg = _linreg_cls()().fit(pca.transform(Xtr), ytr)
         return np.ravel(reg.predict(pca.transform(Xte)))
     raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
 
 
-def _cv_predict(X, y, nc, cfg, pre, folds, method):
-    """Held-out predictions, preprocessing re-fit inside every fold (no leakage)."""
-    pred = np.full(len(y), np.nan)
+def _fit_predict_nested(Xtr, ytr, Xte, cap, cfg, method):
+    """ONE fit at `cap` components, predictions for a = 1..cap by truncation: returns an
+    array (len(Xte), cap) whose column a-1 equals `_fit_predict(..., a, ...)`.
+
+    PLS1 (NIPALS): the first a weights/loadings of a cap-component model ARE the a-component
+    model's, and P'W is upper triangular, so the leading block of the rotation matrix
+    R = W (P'W)^-1 is the a-component rotation. Hence the a-component prediction is
+    y_mean + y_std * T[:, :a] @ q[:a] with T = model.transform(Xte) and q the y-loadings
+    (sklearn scales y by its ddof=1 SD when scale=True). PCR: PCA scores are orthogonal and
+    mean-zero, so the OLS coefficients on the first a scores are the leading a coefficients of
+    the cap-score regression. Both identities are checked numerically in tests/ and, here,
+    at a = cap against the model's own predict(): on a mismatch the fold falls back to
+    from-scratch fits with a WARN, so a convention change in scikit-learn cannot pass silently."""
+    cap = int(min(cap, len(Xtr) - 1, Xtr.shape[1]))
+    if method == "pls":
+        m = _pls_cls()(n_components=cap, scale=cfg.pls_scale).fit(Xtr, ytr)
+        T = np.asarray(m.transform(Xte))                       # (n_te, cap), scaled-x rotations
+        q = np.ravel(m.y_loadings_)                            # (cap,)
+        y_std = float(np.std(ytr, ddof=1)) if (cfg.pls_scale and len(ytr) > 1) else 1.0
+        y_std = y_std if y_std != 0 else 1.0
+        y_mean = float(np.ravel(m.intercept_)[0])
+        out = y_mean + y_std * np.cumsum(T * q, axis=1)
+        check = np.ravel(m.predict(Xte))
+    elif method == "pcr":
+        pca = _pca_cls()(n_components=cap, svd_solver="full").fit(Xtr)
+        Ttr, Tte = pca.transform(Xtr), pca.transform(Xte)
+        reg = _linreg_cls()().fit(Ttr, ytr)
+        b = np.ravel(reg.coef_)
+        out = float(np.ravel(reg.intercept_)[0]) + np.cumsum(Tte * b, axis=1)
+        check = np.ravel(reg.predict(Tte))
+    else:
+        raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
+    tol = 1e-8 * max(float(np.max(np.abs(check))), 1.0)
+    if not np.allclose(out[:, -1], check, rtol=0, atol=tol):
+        print(f"  [WARN] chemometrics: nested {method} truncation disagrees with predict() at "
+              f"{cap} components (max |d| = {np.max(np.abs(out[:, -1] - check)):.2e}); "
+              f"falling back to from-scratch fits for this fold")
+        out = np.column_stack([_fit_predict(Xtr, ytr, Xte, a, cfg, method)
+                               for a in range(1, cap + 1)])
+    return out
+
+
+def _fold_blocks(X, cfg, pre, folds):
+    """Preprocess each fold ONCE: [(tr, te, Xtr_p, Xte_p)], a FRESH Preprocessor fit on the
+    training rows only. Every step is a function of X alone (SNV/derivatives per row; MSC,
+    centre, autoscale from the training rows), so the blocks are reusable across component
+    counts and across y-permutations."""
+    blocks = []
     for tr, te in folds:
         pp = Preprocessor(pre, cfg)                      # FRESH per fold
         Xtr = pp.fit_transform(X[tr])                    # fit on TRAIN rows only
         Xte = pp.transform(X[te])
+        blocks.append((tr, te, Xtr, Xte))
+    return blocks
+
+
+def _cv_predict(X, y, nc, cfg, pre, folds, method, blocks=None):
+    """Held-out predictions, preprocessing re-fit inside every fold (no leakage)."""
+    if blocks is None:
+        blocks = _fold_blocks(X, cfg, pre, folds)
+    pred = np.full(len(y), np.nan)
+    for tr, te, Xtr, Xte in blocks:
         pred[te] = _fit_predict(Xtr, y[tr], Xte, nc, cfg, method)
     return pred
 
 
+def _cv_predict_scan(X, y, cap, cfg, pre, folds, method, nested=True):
+    """Held-out predictions for EVERY component count 1..cap at once: array (n, cap).
+    nested=True (the default) fits once per fold at `cap` and truncates; nested=False refits
+    per component count (the reference the tests compare against)."""
+    blocks = _fold_blocks(X, cfg, pre, folds)
+    pred = np.full((len(y), cap), np.nan)
+    if nested:
+        for tr, te, Xtr, Xte in blocks:
+            p = _fit_predict_nested(Xtr, y[tr], Xte, cap, cfg, method)
+            pred[te, :p.shape[1]] = p
+            if p.shape[1] < cap:                          # fold too small for cap: hold the last
+                pred[te, p.shape[1]:] = p[:, -1:]
+    else:
+        for a in range(1, cap + 1):
+            pred[:, a - 1] = _cv_predict(X, y, a, cfg, pre, folds, method, blocks=blocks)
+    return pred
+
+
 def _optimistic_loo(groups, scheme, y, cfg):
-    sch = (scheme or getattr(cfg, "cv_scheme", "auto")).lower()
+    sch = (scheme or cfg.cv_scheme).lower()
     return (groups is None and sch in ("auto", "loo")
             and np.unique(y).size < y.size)
 
@@ -428,26 +506,28 @@ def cross_validate(X, y, n_components, cfg, pre=None, groups=None, scheme=None,
         if _optimistic_loo(groups, scheme, y, cfg):
             f.append(("WARN", "LOO over data with replicated y answers 'predict a SEEN level'; "
                               "for a NEW level pass groups=level-labels (leave-one-level-out)"))
-        f.append(("INFO", f"{scheme_name}: RMSECV={rmsecv:.3g} {getattr(cfg,'conc_unit','')}, "
+        f.append(("INFO", f"{scheme_name}: RMSECV={rmsecv:.3g} {cfg.conc_unit}, "
                           f"R2cv={r2cv:.3f}, bias={bias:+.3g}, {len(folds)} folds"))
         verify._resolve(f, cfg, "cross-validate")
     return {"pred": pred, "resid": resid, "rmsecv": rmsecv, "r2cv": r2cv, "bias": bias,
             "n_components": int(n_components), "method": method,
             "pre_name": Preprocessor(pre, cfg).name, "scheme": scheme_name,
             "question": question, "n_splits": len(folds),
-            "caption": f"RMSECV={rmsecv:.3g} {getattr(cfg,'conc_unit','')} "
+            "caption": f"RMSECV={rmsecv:.3g} {cfg.conc_unit} "
                        f"({scheme_name}); answers: {question}"}
 
 
 def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None,
-                   scheme=None, method="pls"):
+                   scheme=None, method="pls", _nested=True):
     """RMSECV against component count, ONE curve per preprocessing, all on the same
-    folds (so the curves are comparable). Drives choose_n_components and plot_rmsecv."""
+    folds (so the curves are comparable). Drives choose_n_components and plot_rmsecv.
+    One model per fold at the cap, truncated to every smaller count (`_nested=False` refits
+    per count - the reference path, kept for the equivalence test)."""
     _, X, y = _check_xy(X, y, cfg)
     n = len(y)
     folds, scheme_name, question = _make_folds(n, y, groups, scheme, cfg)
     min_train = min(len(tr) for tr, _ in folds)
-    cap = int(min(max_components or getattr(cfg, "pls_max_components", 10),
+    cap = int(min(max_components or cfg.pls_max_components,
                   min_train - 1, X.shape[1]))
     cap = max(cap, 1)
     if pre_options is None:
@@ -460,10 +540,8 @@ def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None
                           "pass groups=level-labels for leave-one-level-out"))
     for pre in pre_options:
         name = Preprocessor(pre, cfg).name
-        rms = []
-        for nc in comps:
-            pred = _cv_predict(X, y, nc, cfg, pre, folds, method)
-            rms.append(float(np.sqrt(np.nanmean((y - pred) ** 2))))
+        pred = _cv_predict_scan(X, y, cap, cfg, pre, folds, method, nested=_nested)
+        rms = [float(np.sqrt(np.nanmean((y - pred[:, i]) ** 2))) for i in range(cap)]
         curves[name] = rms
         f.append(("INFO", f"{name:14s} RMSECV " + " ".join(f"{r:.2f}" for r in rms)))
     verify._resolve(f, cfg, f"component-scan[{scheme_name}]")
@@ -475,7 +553,7 @@ def choose_n_components(scan, cfg, tol=None):
     """Parsimony pick: the FEWEST components whose RMSECV is within `tol` (fraction)
     of the global-min RMSECV across all scanned preprocessings. Ties broken by lower
     RMSECV. Avoids the over-fit you get from taking the global argmin."""
-    tol = getattr(cfg, "lv_parsimony_tol", 0.10) if tol is None else tol
+    tol = cfg.lv_parsimony_tol if tol is None else tol
     flat = [(pre, nc, scan["curves"][pre][i])
             for pre in scan["curves"] for i, nc in enumerate(scan["components"])]
     gmin = min(v for _, _, v in flat)
@@ -511,7 +589,7 @@ def _xaxis(ax, x, cfg):
     """Honour FTIR inversion / cfg.x_limits for a wavenumber x-axis."""
     if cfg.x_limits:
         ax.set_xlim(*cfg.x_limits)
-    elif getattr(cfg, "domain", "ftir") == "ftir":
+    elif cfg.domain == "ftir":
         ax.set_xlim(float(np.max(x)), float(np.min(x)))
 
 
@@ -526,7 +604,7 @@ def plot_rmsecv(ax, scan, cfg, choice=None):
                    facecolor="none", edgecolor="k", linewidth=1.2)
     ax.set_xticks(comps)
     ax.set_xlabel("Components (latent variables)")
-    ax.set_ylabel(f"RMSECV / {getattr(cfg, 'conc_unit', 'a.u.')}")
+    ax.set_ylabel(f"RMSECV / {cfg.conc_unit}")
     if len(scan["curves"]) > 1:
         ax.legend(fontsize=6.5)
     return ax
@@ -546,7 +624,7 @@ def plot_coefficients(ax, model, x, cfg, ref=None, ref_label="reference", highli
         ax.fill_between(x, ref * scale, color="#56B4E9", alpha=0.35, lw=0, label=ref_label)
     ax.plot(x, coef, color="#222222", lw=0.8, zorder=3, label="coef.")
     _xaxis(ax, x, cfg)
-    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if getattr(cfg, "domain", "ftir") == "ftir"
+    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if cfg.domain == "ftir"
                   else r"2$\theta$ / deg")
     ax.set_ylabel("Regression coef. (a.u.)")
     ax.legend(fontsize=6, loc="best")
@@ -574,7 +652,7 @@ def plot_scores(ax, model, cfg, color_by=None, comps=(0, 1), cbar=None, cbar_lab
     ax.set_ylabel("sample (index)" if one else f"{tag}{j+1} score (a.u.)")
     if cbar is not None and color_by is not None:
         cb = cbar.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
-        cb.set_label(cbar_label or getattr(cfg, "conc_unit", "a.u."), fontsize=7)
+        cb.set_label(cbar_label or cfg.conc_unit, fontsize=7)
     return sc
 
 
@@ -590,7 +668,7 @@ def plot_loadings(ax, model, x, cfg, comps=(0, 1), highlight=None):
         ax.plot(x, P[:, c], color=_CYCLE[k % len(_CYCLE)], lw=0.8,
                 alpha=1.0 if k == 0 else 0.75, label=f"{tag}{c+1}")
     _xaxis(ax, x, cfg)
-    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if getattr(cfg, "domain", "ftir") == "ftir"
+    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if cfg.domain == "ftir"
                   else r"2$\theta$ / deg")
     ax.set_ylabel(f"{tag} loading (a.u.)")
     ax.legend(fontsize=6.5)
@@ -664,8 +742,8 @@ def methods_text(model, cv, choice, cfg):
         f"The number of {tag} was chosen by cross-validation: {choice['caption']}.",
         f"Cross-validation used {cv['scheme']}, which answers '{cv['question']}'.",
         f"Figures of merit: RMSEC={model.get('rmsec', float('nan')):.3g} "
-        f"{getattr(cfg, 'conc_unit', 'a.u.')}, R2(cal)={model.get('r2_cal', float('nan')):.3f}; "
-        f"RMSECV={cv['rmsecv']:.3g} {getattr(cfg, 'conc_unit', 'a.u.')}, "
+        f"{cfg.conc_unit}, R2(cal)={model.get('r2_cal', float('nan')):.3f}; "
+        f"RMSECV={cv['rmsecv']:.3g} {cfg.conc_unit}, "
         f"R2(CV)={cv['r2cv']:.3f}, bias={cv['bias']:+.3g}.",
     ]
     return "\n".join(lines)
@@ -1013,15 +1091,35 @@ def permutation_test(X, y, n_components, cfg, n_perm=199, groups=None, scheme=No
                      method="pls", pre=None, seed=0):
     """Permutation / y-scrambling test: refit on shuffled y n_perm times to build the null for
     R2(CV), then p = (#{null >= observed} + 1) / (n_perm + 1). With groups, y is permuted between
-    LEVELS (see _permute_y). Guards a small calibration against a chance correlation."""
+    LEVELS (see _permute_y). Guards a small calibration against a chance correlation.
+
+    The per-fold preprocessing depends on X only, so it is done once and reused across the
+    permutations whenever the folds themselves do not depend on y (groups given, or the
+    per-sample LOO scheme). The level-stratified k-fold WITHOUT groups builds its folds from
+    the y values, so there the folds and blocks are rebuilt per permutation."""
     rng = np.random.default_rng(seed)
+    pre = cfg.pls_preprocess if pre is None else pre
+    _, X, y = _check_xy(X, y, cfg, n_components)
     obs = cross_validate(X, y, n_components, cfg, pre=pre, groups=groups, scheme=scheme,
                          method=method, report=False)["r2cv"]
+    folds_fixed = groups is not None or (scheme or cfg.cv_scheme).lower() in ("auto", "loo")
+    if folds_fixed:
+        folds, _, _ = _make_folds(len(y), y, groups, scheme, cfg)
+        blocks = _fold_blocks(X, cfg, pre, folds)
+
+    def r2cv(yp):
+        if folds_fixed:
+            pred = _cv_predict(X, yp, n_components, cfg, pre, folds, method, blocks=blocks)
+        else:
+            f, _, _ = _make_folds(len(yp), yp, groups, scheme, cfg)
+            pred = _cv_predict(X, yp, n_components, cfg, pre, f, method)
+        resid = yp - pred
+        ss_tot = float(np.sum((yp - yp.mean()) ** 2))
+        return 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
+
     null = np.empty(n_perm)
     for i in range(n_perm):
-        yp = _permute_y(y, groups, rng)
-        null[i] = cross_validate(X, yp, n_components, cfg, pre=pre, groups=groups, scheme=scheme,
-                                 method=method, report=False)["r2cv"]
+        null[i] = r2cv(_permute_y(y, groups, rng))
     p = (int(np.sum(null >= obs)) + 1) / (n_perm + 1)
     return {"observed": float(obs), "null": null, "p_value": float(p), "n_perm": n_perm,
             "caption": f"permutation test: R2(CV)={obs:.3f}, p={p:.3g} ({n_perm} permutations)"}
