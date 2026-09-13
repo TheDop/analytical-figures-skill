@@ -14,11 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Sequence, List, Tuple
 import os
-import matplotlib
-import matplotlib.pyplot as plt
 import re
 import numpy as np
+import functools
 import math
+from scipy.spatial import cKDTree
 from dataclasses import replace
 import os, sys
 
@@ -215,6 +215,13 @@ class Config:
     color_by_component: bool = False      # cocrystal figures: keep the largest molecule in full element colour, desaturate the others (distinguish API vs coformer)
 
 
+def default_cfg(cfg):
+    """Resolve an optional cfg: None -> ONE Config() of the skill defaults, so every threshold a
+    `cfg=None` entry point uses is a declared field (a misspelt one fails loudly) instead of a
+    per-call literal that can drift from Config. The one mechanism for every module."""
+    return Config() if cfg is None else cfg
+
+
 # ======================================================================
 # from style.py
 # ======================================================================
@@ -229,7 +236,17 @@ Three jobs, all about consistency rather than "how to use matplotlib":
 
 Degrades gracefully: if scienceplots is absent it falls back to a built-in
 preset that encodes the same intent (no LaTeX requirement).
+
+pyplot is imported on FIRST USE (`_plt()`), not at module load: `spectra`, `verify`,
+`calibration` and `charts` import this module, so a CSV-only standalone or `cli.py` would
+otherwise pay the ~0.3 s matplotlib import for numbers that never reach a figure.
 """
+
+
+def _plt():
+    """matplotlib.pyplot, imported lazily (see the module docstring)."""
+    import matplotlib.pyplot as plt
+    return plt
 
 # Okabe-Ito: colour-blind safe. Order chosen so the first few are maximally distinct.
 OKABE_ITO = ["#000000", "#E69F00", "#56B4E9", "#009E73",
@@ -276,7 +293,7 @@ def _main_rc(cfg):
     pal = _palette(cfg)
     # redundant encoding so grayscale still separates overlaid traces. The CHANNEL depends on
     # cfg.redundancy: dashes for smooth data, sparse markers for choppy data, or none.
-    red = getattr(cfg, "redundancy", "none")   # house default: spectra solid unless opted out
+    red = cfg.redundancy                        # house default "none": spectra solid unless opted out
     line_extra = {}
     if red == "marker":
         marks = ["o", "s", "^", "D", "v", "P", "X", "*"]
@@ -308,6 +325,7 @@ def _main_rc(cfg):
 def apply_style(cfg):
     """Install the house  Call once before plotting."""
     # Prefer scienceplots' no-latex style; fall back to the hand-rolled preset.
+    plt = _plt()
     try:
         import warnings
         with warnings.catch_warnings():
@@ -339,7 +357,7 @@ def figure(cfg, nrows=1, ncols=1, height=None, height_ratios=None,
         gridspec_kw["height_ratios"] = height_ratios
     if width_ratios:
         gridspec_kw["width_ratios"] = width_ratios
-    fig, axes = plt.subplots(nrows, ncols, figsize=(w, h),
+    fig, axes = _plt().subplots(nrows, ncols, figsize=(w, h),
                              gridspec_kw=gridspec_kw or None, **kw)
     return fig, axes
 
@@ -353,8 +371,9 @@ def _figure_metadata(cfg, extra=None):
     matplotlib's default 'Software'/date tEXt on PNG, which makes the raster proof
     byte-reproducible."""
     import sys
-    desc = (getattr(cfg, "description", "") or "").strip()
+    desc = (cfg.description or "").strip()
     ver = f"analytical-figures v{SKILL_VERSION}"
+    import matplotlib
     soft = f"{ver}; matplotlib {matplotlib.__version__}; python {sys.version.split()[0]}"
     pdf = {"Creator": ver, "Producer": soft}          # PDF/PS: fixed key set
     svg = {"Creator": ver}                            # SVG: Title/Description/Creator
@@ -400,8 +419,9 @@ def check_figure_width(fig, cfg=None, journal=None, column=None, tol_mm=0.5):
     submission-ready and won't be silently rescaled (rescaling shrinks the pt fonts). Returns
     (ok, message); journals quote widths in mm so the message is in mm. journal/column default
     from cfg. (ACS Anal. Chem. single 3.33 in / double 7.0 in; Nature 89 / 183 mm.)"""
-    journal = journal or getattr(cfg, "journal", "general")
-    column = column or getattr(cfg, "column", "single")
+    cfg = default_cfg(cfg)
+    journal = journal or cfg.journal
+    column = column or cfg.column
     spec = _WIDTHS.get(journal, _WIDTHS["general"])
     want_in = spec.get(column, spec["single"])
     got_in = float(fig.get_size_inches()[0])
@@ -571,13 +591,13 @@ def add_panel_labels(fig, cfg=None, axes=None, labels=None, style=None,
         x_offset_pt = _auto_x_offset(fig, axs)
     if labels is None:
         if style is None:
-            style = getattr(cfg, "journal", "general") if cfg else "general"
+            style = default_cfg(cfg).journal
         fmt = _PANEL_FMT.get(style, _PANEL_FMT["general"])
         labels = [fmt(s) for s in _letter_sequence(len(axs))]
     elif len(labels) < len(axs):
         raise ValueError(f"{len(labels)} labels for {len(axs)} panels")
     if fontsize is None:
-        fontsize = plt.rcParams.get("axes.labelsize", 9)
+        fontsize = _plt().rcParams.get("axes.labelsize", 9)
     placed = []
     for ax, lab in zip(axs, labels):
         t = ax.annotate(lab, xy=(0, 1), xycoords="axes fraction",
@@ -603,7 +623,7 @@ def panel_letter(ax, label, loc="upper left", pad=0.04, fontsize=None,
     NB audit_layout's one-letter-per-panel check assumes a flat grid and will
     over-count a nested/sectioned figure -- confirm the lettering by reading the PNG."""
     if fontsize is None:
-        fontsize = plt.rcParams.get("axes.labelsize", 9)
+        fontsize = _plt().rcParams.get("axes.labelsize", 9)
     va = "top" if "upper" in loc else "bottom"
     ha = "right" if "right" in loc else "left"
     x = (1 - pad) if ha == "right" else pad
@@ -654,11 +674,12 @@ class GateError(RuntimeError):
 
 
 def _resolve(findings, cfg, context=""):
-    """Print findings; raise on any FAIL if cfg.strict."""
+    """Print findings; raise on any FAIL if cfg.strict (cfg=None -> the skill defaults)."""
+    cfg = default_cfg(cfg)
     worst = max((SEV[s] for s, _ in findings), default=0)
     for sev, msg in findings:
         print(f"  [{sev}] {context}{': ' if context else ''}{msg}")
-    if worst == SEV["FAIL"] and getattr(cfg, "strict", True):
+    if worst == SEV["FAIL"] and cfg.strict:
         fails = "; ".join(m for s, m in findings if s == "FAIL")
         raise GateError(f"{context}: {fails}")
     return findings
@@ -803,7 +824,7 @@ def flag_outliers_mad(values, cfg=None, n_mads=None, name="metric"):
     vf = v[finite]
     n = vf.size
     if n_mads is None:
-        n_mads = getattr(cfg, "outlier_mad_n", 3.5) if cfg is not None else 3.5
+        n_mads = default_cfg(cfg).outlier_mad_n
     med = float(np.median(vf)) if n else float("nan")
     abs_dev = np.abs(vf - med)
     mad = float(np.median(abs_dev)) if n else float("nan")
@@ -886,11 +907,7 @@ def multiplicity_check(pvals, cfg=None, alpha=0.05, method="holm", labels=None, 
             f.append(("INFO", f"{m} p-values, {method}-adjusted: {n_adj} significant at alpha={alpha}"))
     else:
         f.append(("INFO", "single p-value — no multiplicity correction needed"))
-    if cfg is not None:
-        _resolve(f, cfg, context)
-    else:
-        for s, msg in f:
-            print(f"  [{s}] {context}: {msg}")
+    _resolve(f, cfg, context)                   # only INFO/WARN here, so cfg=None prints the same
     return {"raw": p, "adjusted": adj, "reject": reject, "method": method, "alpha": alpha,
             "labels": list(labels) if labels is not None else None,
             "caption": f"{method}-adjusted p (family of {m}, alpha={alpha})"}
@@ -1101,9 +1118,10 @@ def audit_layout(fig, cfg=None):
     multi-panel figures - that every panel carries exactly one a/b/c letter (place
     them with add_panel_labels)."""
     import matplotlib.text as mtext
+    cfg = default_cfg(cfg)
     f = []
-    tol = getattr(cfg, "tick_overlap_tol_px", 2.0) if cfg else 2.0
-    clip_tol = getattr(cfg, "clip_tol_px", 2.0) if cfg else 2.0
+    tol = cfg.tick_overlap_tol_px
+    clip_tol = cfg.clip_tol_px
     # missing glyphs: intercept the render warning channels (catches tofu with no
     # U+FFFD); this render also realises the text extents used below.
     for g in _glyph_render_warnings(fig)[:2]:
@@ -1126,7 +1144,7 @@ def audit_layout(fig, cfg=None):
                 f.append(("FAIL", f"missing glyph in '{t.get_text()}' (font lacks the char)"))
         # data escaping the panel: report the worst line only, so a stack that all overflows
         # together gives one actionable message rather than one per trace
-        esc = _escaping_lines(ax, getattr(cfg, "escape_tol_frac", 0.01) if cfg else 0.01)
+        esc = _escaping_lines(ax, cfg.escape_tol_frac)
         if esc:
             frac, n_out, n_vis, lab = max(esc)
             who = lab if lab and not str(lab).startswith("_") else "a trace"
@@ -1761,9 +1779,9 @@ def integrate_bands(x, y, cfg):
     x = np.asarray(x, float); y = np.asarray(y, float)
     o = np.argsort(x, kind="stable")                 # a descending export (raw .spc: 4000 -> 650) would
     x, y = x[o], y[o]                                # flip the trapezoid sign and break np.interp
-    half = 2.0 if getattr(cfg, "domain", "ftir") == "ftir" else 0.0   # anchor averaging window (x units)
+    half = 2.0 if cfg.domain == "ftir" else 0.0     # anchor averaging window (x units)
     windows = cfg.integration_windows
-    mode = getattr(cfg, "integration_baseline", "per_window")
+    mode = cfg.integration_baseline
 
     # shared mode draws the baseline once, across the union of all windows
     env = None
@@ -1855,7 +1873,7 @@ def plot_waterfall(groups, cfg, offset=None):
             ax.axvline(tt, color="0.6", lw=0.5, ls=":")
     _apply_axis(ax, cfg)
     ax.set_yticks([])                          # offsets are arbitrary; hide the y scale
-    mode = getattr(cfg, "waterfall_legend", "edge")
+    mode = cfg.waterfall_legend
     if len(groups) > 1 and mode == "legend":
         ax.legend(loc="best")
     elif len(groups) > 1 and mode == "edge":
@@ -2068,11 +2086,14 @@ imports it.
     pcr_fit / pca_fit                     PCR regression / PCA decomposition (same dict shape)
     cross_validate(X, y, nc, cfg, ...)    leakage-safe RMSECV + held-out predictions, scheme NAMED
     component_scan(X, y, cfg, ...)        RMSECV vs components, one curve per preprocessing
+                                          (one fit per fold at the cap, truncated to 1..cap)
     choose_n_components(scan, cfg)        the parsimony pick
     vip(model)                            VIP scores (which wavenumbers drive the model)
     plot_rmsecv / plot_coefficients / plot_scores / plot_loadings   ax-level panels
     diagnostics_figure(X, y, x, cfg, ...) the gated + QA'd 2x2 composite deliverable
     methods_text(model, cv, choice, cfg)  paste-ready methods paragraph
+    permutation_test / corrected_paired_t / rpd / rpiq   the validation trio
+                                          (per-fold preprocessing cached across permutations)
 
 (methods_text, not methods_report — the latter is py's name, and the bundler
 flattens every module into one namespace, so module-level names must be unique.)
@@ -2092,9 +2113,12 @@ def _pls_cls():
 
 
 def _pca_cls():
+    """PCA with the deterministic full SVD pinned ONCE, so the CV scan, the deployed pca_fit /
+    pcr_fit model and the nested truncation all decompose the same way (sklearn's 'auto'
+    policy may pick a randomised solver on wide data)."""
     try:
         from sklearn.decomposition import PCA
-        return PCA
+        return functools.partial(PCA, svd_solver="full")
     except ImportError as e:
         raise ImportError(_SKLEARN_HINT) from e
 
@@ -2324,7 +2348,7 @@ def pls_fit(X, y, n_components, cfg, pre=None):
     Xp = pp.fit_transform(X)
     nc = min(n_components, X.shape[0] - 1, Xp.shape[1])
     PLS = _pls_cls()
-    m = PLS(n_components=nc, scale=getattr(cfg, "pls_scale", True)).fit(Xp, y)
+    m = PLS(n_components=nc, scale=cfg.pls_scale).fit(Xp, y)
     coef = _coef_vector(m, Xp.shape[1])
     yhat = np.ravel(m.predict(Xp))
     resid, r2, rmsec = _fit_stats(y, yhat)
@@ -2343,7 +2367,7 @@ def pca_fit(X, cfg, n_components=None, pre=None):
     _, X, _y = _check_xy(X, np.zeros(X.shape[0]), cfg)
     pp = Preprocessor(pre, cfg)
     Xp = pp.fit_transform(X)
-    nc = n_components or min(getattr(cfg, "pls_max_components", 10), *Xp.shape)
+    nc = n_components or min(cfg.pls_max_components, *Xp.shape)
     nc = int(min(nc, *Xp.shape))            # cap at min(n_samples, n_features) (sklearn's own limit)
     PCA = _pca_cls()
     m = PCA(n_components=nc).fit(Xp)
@@ -2388,7 +2412,7 @@ def _make_folds(n, y, groups, scheme, cfg):
         folds = [(idx[groups != g], idx[groups == g]) for g in uniq]
         return (folds, f"leave-one-group-out ({len(uniq)} groups)",
                 "predict a NEW group (e.g. an unseen concentration level)")
-    sch = (scheme or getattr(cfg, "cv_scheme", "auto")).lower()
+    sch = _scheme(scheme, cfg)
     if sch in ("auto", "loo"):
         folds = [(idx[idx != i], np.array([i])) for i in idx]
         return (folds, "leave-one-out (per sample)",
@@ -2400,7 +2424,7 @@ def _make_folds(n, y, groups, scheme, cfg):
         # and the sorted levels are interleaved across folds so every fold spans the response
         # range (contiguous blocks would make the end folds pure extrapolation).
         levels = np.unique(y)
-        k = int(min(getattr(cfg, "cv_folds", 5), len(levels)))
+        k = int(min(cfg.cv_folds, len(levels)))
         parts = [idx[np.isin(y, levels[i::k])] for i in range(k)]
         parts = [p for p in parts if len(p)]
         folds = [(np.setdiff1d(idx, p), p) for p in parts]
@@ -2410,9 +2434,11 @@ def _make_folds(n, y, groups, scheme, cfg):
 
 
 def _fit_predict(Xtr, ytr, Xte, nc, cfg, method):
+    """One model at `nc` components, from scratch (the reference path; `_fit_predict_nested`
+    is the fast one the scan uses)."""
     nc = int(min(nc, len(Xtr) - 1, Xtr.shape[1]))
     if method == "pls":
-        m = _pls_cls()(n_components=nc, scale=getattr(cfg, "pls_scale", True)).fit(Xtr, ytr)
+        m = _pls_cls()(n_components=nc, scale=cfg.pls_scale).fit(Xtr, ytr)
         return np.ravel(m.predict(Xte))
     if method == "pcr":
         pca = _pca_cls()(n_components=nc).fit(Xtr)
@@ -2421,20 +2447,107 @@ def _fit_predict(Xtr, ytr, Xte, nc, cfg, method):
     raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
 
 
-def _cv_predict(X, y, nc, cfg, pre, folds, method):
-    """Held-out predictions, preprocessing re-fit inside every fold (no leakage)."""
-    pred = np.full(len(y), np.nan)
+def _fit_predict_nested(Xtr, ytr, Xte, cap, cfg, method):
+    """ONE fit at `cap` components, predictions for a = 1..cap by truncation: returns an
+    array (len(Xte), cap) whose column a-1 equals `_fit_predict(..., a, ...)`.
+
+    PLS1 (NIPALS): the first a weights/loadings of a cap-component model ARE the a-component
+    model's, and P'W is upper triangular, so the leading block of the rotation matrix
+    R = W (P'W)^-1 is the a-component rotation. Hence the a-component prediction is
+    intercept + s * T[:, :a] @ q[:a] with T = model.transform(X), q the y-loadings and s the
+    y scale sklearn applied (its ddof=1 SD when scale=True, 1 otherwise). s is read off the
+    fitted model itself - the least-squares ratio of (predict - intercept) to T @ q on the
+    training rows - so no sklearn convention is hand-replicated. PCR: PCA scores are
+    orthogonal and mean-zero, so the OLS coefficients on the first a scores are the leading a
+    coefficients of the cap-score regression. Both identities are pinned column by column in
+    tests/test_nested_scan.py; the cap column is also checked here against the model's own
+    predict() and a mismatch RAISES (a silent fallback would let a convention change in
+    scikit-learn switch the algorithm behind a print)."""
+    cap = int(min(cap, len(Xtr) - 1, Xtr.shape[1]))
+    if method == "pls":
+        m = _pls_cls()(n_components=cap, scale=cfg.pls_scale).fit(Xtr, ytr)
+        q = np.ravel(m.y_loadings_)                            # (cap,)
+        y_mean = float(np.ravel(m.intercept_)[0])
+        t_tr = np.asarray(m.transform(Xtr)) @ q
+        p_tr = np.ravel(m.predict(Xtr)) - y_mean
+        tt = float(t_tr @ t_tr)
+        scale = float(p_tr @ t_tr) / tt if tt > 0 else 1.0
+        out = y_mean + scale * np.cumsum(np.asarray(m.transform(Xte)) * q, axis=1)
+        check = np.ravel(m.predict(Xte))
+    elif method == "pcr":
+        pca = _pca_cls()(n_components=cap).fit(Xtr)
+        Ttr, Tte = pca.transform(Xtr), pca.transform(Xte)
+        reg = _linreg_cls()().fit(Ttr, ytr)
+        b = np.ravel(reg.coef_)
+        out = float(np.ravel(reg.intercept_)[0]) + np.cumsum(Tte * b, axis=1)
+        check = np.ravel(reg.predict(Tte))
+    else:
+        raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
+    tol = 1e-8 * max(float(np.max(np.abs(check))), 1.0)
+    if not np.allclose(out[:, -1], check, rtol=0, atol=tol):
+        raise RuntimeError(
+            f"chemometrics: nested {method} truncation disagrees with predict() at {cap} "
+            f"components (max |d| = {np.max(np.abs(out[:, -1] - check)):.2e}); the truncation "
+            f"identity no longer holds for this scikit-learn - use _fit_predict per count")
+    return out
+
+
+def _fold_blocks(X, cfg, pre, folds):
+    """Preprocess each fold ONCE: [(tr, te, Xtr_p, Xte_p)], a FRESH Preprocessor fit on the
+    training rows only. Every step is a function of X alone (SNV/derivatives per row; MSC,
+    centre, autoscale from the training rows), so the blocks are reusable across component
+    counts and across y-permutations. A pipeline of row-wise (stateless) steps only is applied
+    to X once and sliced - each row's transform does not depend on which rows share the fold."""
+    pp = Preprocessor(pre, cfg)
+    if all(step in _STATELESS for step in pp.steps):
+        Xp = pp.fit_transform(X)
+        return [(tr, te, Xp[tr], Xp[te]) for tr, te in folds]
+    blocks = []
     for tr, te in folds:
         pp = Preprocessor(pre, cfg)                      # FRESH per fold
         Xtr = pp.fit_transform(X[tr])                    # fit on TRAIN rows only
         Xte = pp.transform(X[te])
+        blocks.append((tr, te, Xtr, Xte))
+    return blocks
+
+
+def _cv_predict(X, y, nc, cfg, pre, folds, method, blocks=None):
+    """Held-out predictions, preprocessing re-fit inside every fold (no leakage)."""
+    if blocks is None:
+        blocks = _fold_blocks(X, cfg, pre, folds)
+    pred = np.full(len(y), np.nan)
+    for tr, te, Xtr, Xte in blocks:
         pred[te] = _fit_predict(Xtr, y[tr], Xte, nc, cfg, method)
     return pred
 
 
+def _cv_predict_scan(X, y, cap, cfg, pre, folds, method):
+    """Held-out predictions for EVERY component count 1..cap at once: array (n, cap), one
+    fit per fold at `cap`, truncated (see _fit_predict_nested)."""
+    pred = np.full((len(y), cap), np.nan)
+    for tr, te, Xtr, Xte in _fold_blocks(X, cfg, pre, folds):
+        p = _fit_predict_nested(Xtr, y[tr], Xte, cap, cfg, method)
+        assert p.shape[1] == cap          # component_scan caps at min_train-1 and n_features
+        pred[te] = p
+    return pred
+
+
+def _scheme(scheme, cfg):
+    return (scheme or cfg.cv_scheme).lower()
+
+
+def _cv_stats(y, pred):
+    """(resid, rmsecv, r2cv, bias) of held-out predictions; NaN-aware."""
+    resid = y - pred
+    rmsecv = float(np.sqrt(np.nanmean(resid ** 2)))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r2cv = 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
+    bias = float(np.nanmean(pred - y))
+    return resid, rmsecv, r2cv, bias
+
+
 def _optimistic_loo(groups, scheme, y, cfg):
-    sch = (scheme or getattr(cfg, "cv_scheme", "auto")).lower()
-    return (groups is None and sch in ("auto", "loo")
+    return (groups is None and _scheme(scheme, cfg) in ("auto", "loo")
             and np.unique(y).size < y.size)
 
 
@@ -2447,36 +2560,33 @@ def cross_validate(X, y, n_components, cfg, pre=None, groups=None, scheme=None,
     _, X, y = _check_xy(X, y, cfg, n_components)
     folds, scheme_name, question = _make_folds(len(y), y, groups, scheme, cfg)
     pred = _cv_predict(X, y, n_components, cfg, pre, folds, method)
-    resid = y - pred
-    rmsecv = float(np.sqrt(np.nanmean(resid ** 2)))
-    ss_tot = float(np.sum((y - y.mean()) ** 2))
-    r2cv = 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
-    bias = float(np.nanmean(pred - y))
+    resid, rmsecv, r2cv, bias = _cv_stats(y, pred)
     if report:
         f = []
         if _optimistic_loo(groups, scheme, y, cfg):
             f.append(("WARN", "LOO over data with replicated y answers 'predict a SEEN level'; "
                               "for a NEW level pass groups=level-labels (leave-one-level-out)"))
-        f.append(("INFO", f"{scheme_name}: RMSECV={rmsecv:.3g} {getattr(cfg,'conc_unit','')}, "
+        f.append(("INFO", f"{scheme_name}: RMSECV={rmsecv:.3g} {cfg.conc_unit}, "
                           f"R2cv={r2cv:.3f}, bias={bias:+.3g}, {len(folds)} folds"))
         _resolve(f, cfg, "cross-validate")
     return {"pred": pred, "resid": resid, "rmsecv": rmsecv, "r2cv": r2cv, "bias": bias,
             "n_components": int(n_components), "method": method,
             "pre_name": Preprocessor(pre, cfg).name, "scheme": scheme_name,
             "question": question, "n_splits": len(folds),
-            "caption": f"RMSECV={rmsecv:.3g} {getattr(cfg,'conc_unit','')} "
+            "caption": f"RMSECV={rmsecv:.3g} {cfg.conc_unit} "
                        f"({scheme_name}); answers: {question}"}
 
 
 def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None,
                    scheme=None, method="pls"):
     """RMSECV against component count, ONE curve per preprocessing, all on the same
-    folds (so the curves are comparable). Drives choose_n_components and plot_rmsecv."""
+    folds (so the curves are comparable). Drives choose_n_components and plot_rmsecv.
+    One model per fold at the cap, truncated to every smaller count (_fit_predict_nested)."""
     _, X, y = _check_xy(X, y, cfg)
     n = len(y)
     folds, scheme_name, question = _make_folds(n, y, groups, scheme, cfg)
     min_train = min(len(tr) for tr, _ in folds)
-    cap = int(min(max_components or getattr(cfg, "pls_max_components", 10),
+    cap = int(min(max_components or cfg.pls_max_components,
                   min_train - 1, X.shape[1]))
     cap = max(cap, 1)
     if pre_options is None:
@@ -2489,10 +2599,8 @@ def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None
                           "pass groups=level-labels for leave-one-level-out"))
     for pre in pre_options:
         name = Preprocessor(pre, cfg).name
-        rms = []
-        for nc in comps:
-            pred = _cv_predict(X, y, nc, cfg, pre, folds, method)
-            rms.append(float(np.sqrt(np.nanmean((y - pred) ** 2))))
+        pred = _cv_predict_scan(X, y, cap, cfg, pre, folds, method)
+        rms = [_cv_stats(y, pred[:, i])[1] for i in range(cap)]
         curves[name] = rms
         f.append(("INFO", f"{name:14s} RMSECV " + " ".join(f"{r:.2f}" for r in rms)))
     _resolve(f, cfg, f"component-scan[{scheme_name}]")
@@ -2504,7 +2612,7 @@ def choose_n_components(scan, cfg, tol=None):
     """Parsimony pick: the FEWEST components whose RMSECV is within `tol` (fraction)
     of the global-min RMSECV across all scanned preprocessings. Ties broken by lower
     RMSECV. Avoids the over-fit you get from taking the global argmin."""
-    tol = getattr(cfg, "lv_parsimony_tol", 0.10) if tol is None else tol
+    tol = cfg.lv_parsimony_tol if tol is None else tol
     flat = [(pre, nc, scan["curves"][pre][i])
             for pre in scan["curves"] for i, nc in enumerate(scan["components"])]
     gmin = min(v for _, _, v in flat)
@@ -2540,7 +2648,7 @@ def _xaxis(ax, x, cfg):
     """Honour FTIR inversion / cfg.x_limits for a wavenumber x-axis."""
     if cfg.x_limits:
         ax.set_xlim(*cfg.x_limits)
-    elif getattr(cfg, "domain", "ftir") == "ftir":
+    elif cfg.domain == "ftir":
         ax.set_xlim(float(np.max(x)), float(np.min(x)))
 
 
@@ -2555,7 +2663,7 @@ def plot_rmsecv(ax, scan, cfg, choice=None):
                    facecolor="none", edgecolor="k", linewidth=1.2)
     ax.set_xticks(comps)
     ax.set_xlabel("Components (latent variables)")
-    ax.set_ylabel(f"RMSECV / {getattr(cfg, 'conc_unit', 'a.u.')}")
+    ax.set_ylabel(f"RMSECV / {cfg.conc_unit}")
     if len(scan["curves"]) > 1:
         ax.legend(fontsize=6.5)
     return ax
@@ -2575,7 +2683,7 @@ def plot_coefficients(ax, model, x, cfg, ref=None, ref_label="reference", highli
         ax.fill_between(x, ref * scale, color="#56B4E9", alpha=0.35, lw=0, label=ref_label)
     ax.plot(x, coef, color="#222222", lw=0.8, zorder=3, label="coef.")
     _xaxis(ax, x, cfg)
-    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if getattr(cfg, "domain", "ftir") == "ftir"
+    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if cfg.domain == "ftir"
                   else r"2$\theta$ / deg")
     ax.set_ylabel("Regression coef. (a.u.)")
     ax.legend(fontsize=6, loc="best")
@@ -2603,7 +2711,7 @@ def plot_scores(ax, model, cfg, color_by=None, comps=(0, 1), cbar=None, cbar_lab
     ax.set_ylabel("sample (index)" if one else f"{tag}{j+1} score (a.u.)")
     if cbar is not None and color_by is not None:
         cb = cbar.colorbar(sc, ax=ax, fraction=0.046, pad=0.03)
-        cb.set_label(cbar_label or getattr(cfg, "conc_unit", "a.u."), fontsize=7)
+        cb.set_label(cbar_label or cfg.conc_unit, fontsize=7)
     return sc
 
 
@@ -2619,7 +2727,7 @@ def plot_loadings(ax, model, x, cfg, comps=(0, 1), highlight=None):
         ax.plot(x, P[:, c], color=_CYCLE[k % len(_CYCLE)], lw=0.8,
                 alpha=1.0 if k == 0 else 0.75, label=f"{tag}{c+1}")
     _xaxis(ax, x, cfg)
-    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if getattr(cfg, "domain", "ftir") == "ftir"
+    ax.set_xlabel(r"Wavenumber / cm$^{-1}$" if cfg.domain == "ftir"
                   else r"2$\theta$ / deg")
     ax.set_ylabel(f"{tag} loading (a.u.)")
     ax.legend(fontsize=6.5)
@@ -2693,8 +2801,8 @@ def methods_text(model, cv, choice, cfg):
         f"The number of {tag} was chosen by cross-validation: {choice['caption']}.",
         f"Cross-validation used {cv['scheme']}, which answers '{cv['question']}'.",
         f"Figures of merit: RMSEC={model.get('rmsec', float('nan')):.3g} "
-        f"{getattr(cfg, 'conc_unit', 'a.u.')}, R2(cal)={model.get('r2_cal', float('nan')):.3f}; "
-        f"RMSECV={cv['rmsecv']:.3g} {getattr(cfg, 'conc_unit', 'a.u.')}, "
+        f"{cfg.conc_unit}, R2(cal)={model.get('r2_cal', float('nan')):.3f}; "
+        f"RMSECV={cv['rmsecv']:.3g} {cfg.conc_unit}, "
         f"R2(CV)={cv['r2cv']:.3f}, bias={cv['bias']:+.3g}.",
     ]
     return "\n".join(lines)
@@ -3042,15 +3150,28 @@ def permutation_test(X, y, n_components, cfg, n_perm=199, groups=None, scheme=No
                      method="pls", pre=None, seed=0):
     """Permutation / y-scrambling test: refit on shuffled y n_perm times to build the null for
     R2(CV), then p = (#{null >= observed} + 1) / (n_perm + 1). With groups, y is permuted between
-    LEVELS (see _permute_y). Guards a small calibration against a chance correlation."""
+    LEVELS (see _permute_y). Guards a small calibration against a chance correlation.
+
+    The per-fold preprocessing depends on X only, so it is done once and reused across the
+    permutations whenever the folds themselves do not depend on y (groups given, or the
+    per-sample LOO scheme). The level-stratified k-fold WITHOUT groups builds its folds from
+    the y values, so there the folds and blocks are rebuilt per permutation."""
     rng = np.random.default_rng(seed)
+    pre = cfg.pls_preprocess if pre is None else pre
+    _, X, y = _check_xy(X, y, cfg, n_components)
     obs = cross_validate(X, y, n_components, cfg, pre=pre, groups=groups, scheme=scheme,
                          method=method, report=False)["r2cv"]
+    folds_fixed = groups is not None or _scheme(scheme, cfg) in ("auto", "loo")
+    if folds_fixed:
+        fixed_folds, _, _ = _make_folds(len(y), y, groups, scheme, cfg)
+        fixed_blocks = _fold_blocks(X, cfg, pre, fixed_folds)
     null = np.empty(n_perm)
     for i in range(n_perm):
         yp = _permute_y(y, groups, rng)
-        null[i] = cross_validate(X, yp, n_components, cfg, pre=pre, groups=groups, scheme=scheme,
-                                 method=method, report=False)["r2cv"]
+        folds = fixed_folds if folds_fixed else _make_folds(len(yp), yp, groups, scheme, cfg)[0]
+        blocks = fixed_blocks if folds_fixed else None
+        pred = _cv_predict(X, yp, n_components, cfg, pre, folds, method, blocks=blocks)
+        null[i] = _cv_stats(yp, pred)[2]
     p = (int(np.sum(null >= obs)) + 1) / (n_perm + 1)
     return {"observed": float(obs), "null": null, "p_value": float(p), "n_perm": n_perm,
             "caption": f"permutation test: R2(CV)={obs:.3f}, p={p:.3g} ({n_perm} permutations)"}
@@ -3269,7 +3390,9 @@ def methods_report(cfg, results=None):
 py  -  CIF -> validated crystal data. The single source of truth for the
 crystal family: parse, symmetry-expand, density triple-check, geometry, H-bonds. The
 figures (crystal_pxrd, crystal_view) consume what this returns; they never recompute, so a
-figure can never assert a contact the table doesn't list.
+figure can never assert a contact the table doesn't list. The bond and H-bond criteria exist
+ONCE, as `is_bonded` and `hbond_geometry`/`is_hbond`; every search (here and in crystal_view)
+goes through them.
 
 Pure computation + Tier-1 gates (no plotting). gemmi is imported lazily (heavy dep; a
 non-CIF job never pulls it). Conventions/constants are pinned in the block below;
@@ -3280,6 +3403,11 @@ ferrocene, flufenamic, lactose, L-alanine, PTU-ellagic + synthetic broken-input 
     expand(struct)            unique (frac,sym,occ) cell positions (global atom x symop dedup)
     densities(struct, cfg)    the signature triple-check + F(000) + element counts + branch gate
     special_positions(struct) atoms on a symmetry element (orbit < n_ops)
+    is_bonded(...)            THE covalent-bond predicate (radii + tolerance + both disorder exclusions)
+    bond_pairs(...)           the vectorised bond search (KD-tree + the same rule) over any atom arrays
+    hbond_geometry / is_hbond THE D-H...A predicate (donor, X-H normalization, vdW, angle, disorder)
+    iter_hbond_candidates     THE D-H...A traversal (H -> its donor -> acceptors within 4 A -> predicate)
+    cell_atoms / supercell    cached cartesian cell + Supercell (lattice-image block with KD-trees)
     bonds(struct, cfg)        covalent-radii bonds, disorder-aware
     hbonds(struct, cfg)       X-H-normalized D-H...A with symmetry-expanded search + geom_hbond xref
     validate(struct, cfg)     run all Tier-1 gates, assemble the validation-table rows
@@ -3314,11 +3442,18 @@ def _gemmi():
 
 
 class Structure:
-    """Parsed + cached crystal data. Build with load(cfg)."""
+    """Parsed + cached crystal data. Build with load(cfg). Everything derived from
+    the structure (expansion, disorder map, cartesian cell, supercells, symmetry images, the
+    PXRD computations) is memoised on it through `memo`, keyed by whatever changes the result."""
     def __init__(self, **kw):
         self.__dict__.update(kw)
-        self._uniq = None
-        self._alt = None
+        self._memo = {}
+
+    def memo(self, key, factory):
+        """The one per-structure cache: `factory()` runs once per `key` (a hashable tuple)."""
+        if key not in self._memo:
+            self._memo[key] = factory()
+        return self._memo[key]
 
     def cart(self, frac):
         p = self.cell.orthogonalize(_gemmi().Fractional(float(frac[0]), float(frac[1]), float(frac[2])))
@@ -3361,7 +3496,9 @@ def _parse_formula(s):
     return out
 
 
+@functools.lru_cache(maxsize=None)
 def _vdw(sym):
+    """Bondi vdW radius from the pinned table, else gemmi's (1.70 if unknown); memoised."""
     if sym in VDW:
         return VDW[sym]
     try:
@@ -3371,9 +3508,137 @@ def _vdw(sym):
         return 1.70
 
 
+@functools.lru_cache(maxsize=None)
+def _cov_r(sym):
+    """Covalent radius (gemmi/Cordero), memoised per element — a gemmi Element construction
+    per atom pair was the dominant cost of every all-pairs search."""
+    return _gemmi().Element(sym).covalent_r
+
+
 def _covsum(s1, s2):
-    g = _gemmi()
-    return g.Element(s1).covalent_r + g.Element(s2).covalent_r
+    return _cov_r(s1) + _cov_r(s2)
+
+
+def bond_search_radius(syms):
+    """The largest distance at which any pair drawn from `syms` can still be bonded — the
+    KD-tree cutoff for a bond search (exact, not a heuristic: is_bonded rejects beyond it)."""
+    rmax = max((_cov_r(x) for x in set(syms)), default=0.7)
+    return 2.0 * rmax + BOND_TOL
+
+
+def _bond_mask(d, covsum, occ_i, occ_j):
+    """The bond rule on arrays (or scalars): 0.4 < d <= covalent-radii sum + BOND_TOL, except
+    near-coincident sub-unity sites (both occ < 1 and d < DISORDER_MIN). The label-based
+    disorder exclusion is applied by the callers (`is_bonded`, `bond_pairs`)."""
+    d, occ_i, occ_j = np.asarray(d, float), np.asarray(occ_i, float), np.asarray(occ_j, float)
+    return (d > 0.4) & (d <= np.asarray(covsum, float) + BOND_TOL) & \
+        ~((occ_i < 1) & (occ_j < 1) & (d < DISORDER_MIN))
+
+
+def is_bonded(sym_i, sym_j, d, occ_i=1.0, occ_j=1.0, label_i=None, label_j=None, alt=None):
+    """THE covalent-bond predicate, shared by every bond search in the family (engine table
+    AND figures): `_bond_mask` plus the labelled disorder-alternative exclusion (`alt` from
+    disorder_alternatives). Pass `alt` wherever labels are known, so a figure never draws a
+    bond the table suppresses. `bond_pairs` is the same rule over arrays."""
+    if not _bond_mask(d, _covsum(sym_i, sym_j), occ_i, occ_j):
+        return False
+    return not (alt is not None and label_i is not None and label_j in alt.get(label_i, ()))
+
+
+def bond_pairs(xyz, sym, occ, label=None, alt=None, tree=None):
+    """Every covalent bond among atoms given as arrays (`xyz` (n,3), `sym`/`label` sequences,
+    `occ` (n,)), as [(i, j, d)] with i < j in lexicographic order — the vectorised form of
+    `is_bonded`: a KD-tree pair query at the exact bond ceiling, then the rule on the whole
+    candidate array, then the disorder-alternative exclusion on the survivors."""
+    xyz = np.asarray(xyz, float)
+    if len(xyz) < 2:
+        return []
+    tree = cKDTree(xyz) if tree is None else tree
+    pairs = tree.query_pairs(bond_search_radius(sym), output_type="ndarray")
+    if not len(pairs):
+        return []
+    pairs = pairs[np.lexsort((pairs[:, 1], pairs[:, 0]))]
+    i, j = pairs[:, 0], pairs[:, 1]
+    d = np.linalg.norm(xyz[i] - xyz[j], axis=1)
+    cov = np.array([_cov_r(s) for s in sym], float)
+    occ = np.asarray(occ, float)
+    keep = _bond_mask(d, cov[i] + cov[j], occ[i], occ[j])
+    if alt is not None and label is not None:
+        for t in np.flatnonzero(keep):
+            if label[j[t]] in alt.get(label[i[t]], ()):
+                keep[t] = False
+    return [(int(a), int(b), float(c)) for a, b, c in zip(i[keep], j[keep], d[keep])]
+
+
+def hbond_sets(cfg):
+    """(donors, acceptors) element sets from cfg (weak mode adds C donors); memoised."""
+    return _hbond_sets(tuple(cfg.hbond_donors), tuple(cfg.hbond_acceptors), bool(cfg.hbond_weak))
+
+
+@functools.lru_cache(maxsize=None)
+def _hbond_sets(donors, acceptors, weak):
+    return (frozenset(donors) | ({"C"} if weak else frozenset()), frozenset(acceptors))
+
+
+def hbond_geometry(D, H, A, cfg, alt=None):
+    """THE D-H...A predicate, shared by the engine table and the figures. D, H, A are atom
+    dicts with 'sym', 'xyz' (cartesian) and 'label'; D must be H's nearest heavy atom (the
+    caller's search finds it). Returns None when the triple is not a candidate at all — D is
+    not a donor, H is not bonded to D, A is not an acceptor, D...A outside [0.4, 4.0] — else
+    a dict {DH, HA, DA, angle, kind}, with H...A and the angle at the X-H-normalized hydrogen
+    (cfg.xh_normalize, Allen & Bruno neutron distances), and kind is
+        'hbond'    angle >= cfg.hbond_angle_min and H...A within the vdW sum  (asserted)
+        'contact'  H...A within vdW, GEOM_CONTACT_MIN <= angle < floor       (listed, not asserted)
+        'bent'     H...A within vdW, angle below GEOM_CONTACT_MIN
+        'far'      H...A beyond the vdW sum
+        'disorder' A is a disorder alternative of D (`alt`) — suppressed before any geometry.
+    `is_hbond` is the boolean view of this (kind == 'hbond')."""
+    donors, acceptors = hbond_sets(cfg)
+    if D["sym"] not in donors or A["sym"] not in acceptors:
+        return None
+    dDH = float(np.linalg.norm(D["xyz"] - H["xyz"]))
+    if dDH > _covsum(D["sym"], "H") + BOND_TOL:
+        return None
+    DA = float(np.linalg.norm(A["xyz"] - D["xyz"]))
+    if DA < 0.4 or DA > 4.0:
+        return None
+    if alt is not None and A["label"] in alt.get(D["label"], ()):
+        return {"DH": dDH, "DA": DA, "HA": None, "angle": None, "kind": "disorder"}
+    hpos = H["xyz"]
+    if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
+        hpos = D["xyz"] + (H["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
+    HA = float(np.linalg.norm(A["xyz"] - hpos))
+    if HA > _vdw("H") + _vdw(A["sym"]):
+        return {"DH": dDH, "DA": DA, "HA": HA, "angle": None, "kind": "far"}
+    ang = _angle(D["xyz"], hpos, A["xyz"])
+    kind = "hbond" if ang >= cfg.hbond_angle_min else ("contact" if ang >= GEOM_CONTACT_MIN else "bent")
+    return {"DH": dDH, "DA": DA, "HA": HA, "angle": ang, "kind": kind}
+
+
+def is_hbond(D, H, A, cfg, alt=None):
+    """True when D-H...A is an asserted H-bond by the engine's criteria (see hbond_geometry)."""
+    g = hbond_geometry(D, H, A, cfg, alt)
+    return g is not None and g["kind"] == "hbond"
+
+
+def iter_hbond_candidates(blk, hs, cfg):
+    """THE D-H...A traversal, shared by the table and every figure: for each hydrogen dict in
+    `hs`, its donor is the nearest heavy atom of the block `blk` (a Supercell) when that atom
+    is a donor element, and every acceptor-element atom within the 4.0 A D...A ceiling is put
+    to `hbond_geometry` (with the block's disorder map). Yields (h, D_idx, A_idx, geo) for every
+    candidate the predicate classifies (any kind); callers keep the kinds they """
+    donors, acceptors = hbond_sets(cfg)
+    for h in hs:
+        k = blk.donor_of(h, donors)
+        if k is None:
+            continue
+        D = blk.atom(k)
+        for j in blk.neighbours(D["xyz"], 4.0):
+            if blk.sym[j] not in acceptors:
+                continue
+            geo = hbond_geometry(D, h, blk.atom(j), cfg, blk.alt)
+            if geo is not None:
+                yield h, k, j, geo
 
 
 def _angle(p, q, r):
@@ -3507,7 +3772,7 @@ def load(cfg):
                 "size_min": fval("_exptl_crystal_size_min")}
     return Structure(name=block.name, blocks=blocks, block=block, cell=cell, ops=ops,
                      atoms=atoms, aniso=aniso, sg_hm=sg_hm, declared=declared,
-                     a=a, b=b, c=c, al=al, be=be, ga=ga)
+                     a=a, b=b, c=c, al=al, be=be, ga=ga, path=cfg.cif_path)
 
 
 # --------------------------------------------------------------------- expansion
@@ -3515,18 +3780,128 @@ def expand(struct):
     """Every (atom x symop) image in the unit cell, deduplicated GLOBALLY by wrapped
     position+element. Robust to special positions AND symmetry-completed atom lists
     (CSD-issued CIFs list the whole molecule, not the minimal AU). Cached."""
-    if struct._uniq is not None:
-        return struct._uniq
-    uniq = {}
-    for at in struct.atoms:
-        for op in struct.ops:
-            gpos = np.array(op.apply_to_xyz(list(at["frac"]))) % 1.0
-            key = (at["sym"], int(round(gpos[0] * 100)) % 100,
-                   int(round(gpos[1] * 100)) % 100, int(round(gpos[2] * 100)) % 100)
-            uniq.setdefault(key, {"sym": at["sym"], "frac": gpos,
-                                  "occ": at["occ"], "label": at["label"]})
-    struct._uniq = list(uniq.values())
-    return struct._uniq
+    def build():
+        uniq = {}
+        for at in struct.atoms:
+            for op in struct.ops:
+                gpos = np.array(op.apply_to_xyz(list(at["frac"]))) % 1.0
+                key = (at["sym"], int(round(gpos[0] * 100)) % 100,
+                       int(round(gpos[1] * 100)) % 100, int(round(gpos[2] * 100)) % 100)
+                uniq.setdefault(key, {"sym": at["sym"], "frac": gpos,
+                                      "occ": at["occ"], "label": at["label"]})
+        return list(uniq.values())
+    return struct.memo(("uniq",), build)
+
+
+def cell_atoms(struct):
+    """expand(struct) with cartesian 'xyz' attached (gemmi orthogonalization, once per site,
+    cached). Fresh dicts every call — callers may annotate them."""
+    xyz = struct.memo(("cell_xyz",), lambda: [struct.cart(u["frac"]) for u in expand(struct)])
+    return [{**u, "xyz": x} for u, x in zip(expand(struct), xyz)]
+
+
+class Supercell:
+    """An immutable cluster of atoms as arrays plus lazily-built cKDTrees — the one neighbour-
+    search substrate for bonds, H-bonds, molecule completion and packing, in the engine AND the
+    figures. `of_struct` builds the block of lattice images lo..hi of the cell atoms (image order
+    = a nested di/dj/dk loop); `from_atoms` wraps any rendered cluster of atom dicts. The block
+    carries its disorder-alternative map `alt`, so every predicate applied through it excludes
+    what the table excludes. `atom(i)` / `rec(i)` build FRESH dicts (callers annotate what they
+    select; the cache stays clean)."""
+    def __init__(self, sym, label, occ, xyz, frac=None, cell=None, alt=None):
+        self.sym, self.label = list(sym), list(label)
+        self.occ = np.asarray(occ, float)
+        self.xyz = np.asarray(xyz, float).reshape(-1, 3)
+        self.frac = None if frac is None else np.asarray(frac, float).reshape(-1, 3)
+        self.cell = cell
+        self.alt = alt
+        self.rmax = bond_search_radius(self.sym)
+        self.heavy_idx = np.flatnonzero(np.asarray(self.sym, object) != "H")
+
+    @classmethod
+    def of_struct(cls, struct, lo, hi):
+        base = cell_atoms(struct)
+        origin = struct.cart(np.zeros(3))
+        cells = [(di, dj, dk) for di in range(lo[0], hi[0] + 1)
+                 for dj in range(lo[1], hi[1] + 1) for dk in range(lo[2], hi[2] + 1)]
+        shifts = [struct.cart(np.array(c, float)) - origin for c in cells]
+        n = len(base)
+        bx = np.array([a["xyz"] for a in base], float).reshape(n, 3)
+        bf = np.array([a["frac"] for a in base], float).reshape(n, 3)
+        blk = cls([a["sym"] for a in base] * len(cells), [a["label"] for a in base] * len(cells),
+                  [a["occ"] for a in base] * len(cells),
+                  np.concatenate([bx + sh for sh in shifts]) if cells else bx[:0],
+                  np.concatenate([bf + np.array(c, float) for c in cells]) if cells else bf[:0],
+                  [c for c in cells for _ in range(n)], disorder_alternatives(struct))
+        home = cells.index((0, 0, 0)) if (0, 0, 0) in cells else None
+        blk.home = range(home * n, home * n + n) if home is not None else range(0)   # the reference cell's indices
+        return blk
+
+    @classmethod
+    def from_atoms(cls, atoms, alt=None):
+        """A rendered cluster (list of atom dicts with sym/label/occ/xyz) as a search block."""
+        return cls([a["sym"] for a in atoms], [a["label"] for a in atoms], [a["occ"] for a in atoms],
+                   np.array([a["xyz"] for a in atoms], float).reshape(-1, 3), alt=alt)
+
+    @functools.cached_property
+    def tree(self):
+        return cKDTree(self.xyz) if len(self.xyz) else None
+
+    @functools.cached_property
+    def tree_heavy(self):
+        return cKDTree(self.xyz[self.heavy_idx]) if len(self.heavy_idx) else None
+
+    def atom(self, i):
+        """Fresh {sym, label, occ, xyz} — what the predicates need."""
+        return {"sym": self.sym[i], "label": self.label[i], "occ": float(self.occ[i]),
+                "xyz": self.xyz[i].copy()}
+
+    def rec(self, i):
+        """atom(i) plus the lattice bookkeeping (frac, cell) of an of_struct block."""
+        return {**self.atom(i), "frac": self.frac[i].copy(), "cell": self.cell[i]}
+
+    def records(self):
+        return [self.rec(i) for i in range(len(self.xyz))]
+
+    def nearest_heavy(self, xyz):
+        """Block index of the heavy atom nearest xyz (None if there is none)."""
+        if self.tree_heavy is None:
+            return None
+        return int(self.heavy_idx[self.tree_heavy.query(xyz)[1]])
+
+    def donor_of(self, h, donors):
+        """Block index of the hydrogen's donor — its nearest heavy atom when that is a donor
+        element — else None. Whether H is actually bonded to it is hbond_geometry's check."""
+        k = self.nearest_heavy(h["xyz"])
+        return k if k is not None and self.sym[k] in donors else None
+
+    def neighbours(self, xyz, r):
+        """Sorted block indices within r of xyz (ascending = the old loop order)."""
+        if self.tree is None:
+            return []
+        return sorted(self.tree.query_ball_point(xyz, r))
+
+    def bonded_to(self, atom):
+        """[(j, d)] block atoms covalently bonded to `atom` (a dict with sym/xyz/occ/label), in
+        index order, by is_bonded with the block's disorder map — the inner step of every
+        molecule-growing search."""
+        out = []
+        for j in self.neighbours(atom["xyz"], self.rmax):
+            d = float(np.linalg.norm(atom["xyz"] - self.xyz[j]))
+            if is_bonded(atom["sym"], self.sym[j], d, atom["occ"], self.occ[j],
+                         atom["label"], self.label[j], self.alt):
+                out.append((j, d))
+        return out
+
+    def bond_pairs(self):
+        """All covalent bonds inside the block, [(i, j, d)] — see bond_pairs."""
+        return bond_pairs(self.xyz, self.sym, self.occ, self.label, self.alt, self.tree)
+
+
+def supercell(struct, lo=(-1, -1, -1), hi=(1, 1, 1)):
+    """Cached Supercell of lattice images lo..hi (default the 3x3x3 block around the cell)."""
+    lo, hi = tuple(int(v) for v in lo), tuple(int(v) for v in hi)
+    return struct.memo(("sup", lo, hi), lambda: Supercell.of_struct(struct, lo, hi))
 
 
 def special_positions(struct):
@@ -3679,8 +4054,10 @@ def disorder_alternatives(struct):
     (2) DISORDER TAGS — same _atom_site_disorder_assembly, different _atom_site_disorder_group
         (handles A/B components farther apart than DISORDER_MIN, e.g. flufenamic's CF3).
     Transitively closed and cached, so a donor never H-bonds to its own alternative site."""
-    if struct._alt is not None:
-        return struct._alt
+    return struct.memo(("alt",), lambda: _disorder_alternatives(struct))
+
+
+def _disorder_alternatives(struct):
     alt = {a["label"]: set() for a in struct.atoms}
 
     def link(la, lb):
@@ -3688,11 +4065,12 @@ def disorder_alternatives(struct):
             alt[la].add(lb); alt[lb].add(la)
 
     sub = [a for a in struct.atoms if a["occ"] < 0.999]
+    sxyz = [struct.cart(a["frac"]) for a in sub]
     for i in range(len(sub)):
         for j in range(i + 1, len(sub)):
             if sub[i]["sym"] != sub[j]["sym"]:
                 continue
-            if float(np.linalg.norm(struct.cart(sub[i]["frac"]) - struct.cart(sub[j]["frac"]))) < DISORDER_MIN:
+            if float(np.linalg.norm(sxyz[i] - sxyz[j])) < DISORDER_MIN:
                 link(sub[i]["label"], sub[j]["label"])
 
     tagged = [a for a in struct.atoms if a.get("dis_grp") not in (None, ".", "", "?")]
@@ -3710,7 +4088,6 @@ def disorder_alternatives(struct):
             new.discard(k)
             if not new <= alt[k]:
                 alt[k] |= new; changed = True
-    struct._alt = alt
     return alt
 
 
@@ -3719,39 +4096,39 @@ def bonds(struct, cfg):
     """Covalent bonds within the cell, DISORDER-AWARE: two sub-unity sites closer than
     DISORDER_MIN are alternative positions, not bonded (else naive perception invents
     0.5 A 'bonds'). Returns list of (i, j, dist) index pairs into expand(struct)."""
-    atoms = expand(struct)
-    alt = disorder_alternatives(struct)
-    xyz = [struct.cart(u["frac"]) for u in atoms]
-    out = []
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            dd = float(np.linalg.norm(xyz[i] - xyz[j]))
-            if dd <= 0.4 or dd > _covsum(atoms[i]["sym"], atoms[j]["sym"]) + BOND_TOL:
-                continue
-            if atoms[i]["occ"] < 1 and atoms[j]["occ"] < 1 and dd < DISORDER_MIN:
-                continue                                  # mutually-exclusive disorder (near-coincident)
-            if atoms[j]["label"] in alt.get(atoms[i]["label"], set()):
-                continue                                  # disorder alternative (incl. group-tagged)
-            out.append((i, j, round(dd, 3)))
-    return out
+    atoms = cell_atoms(struct)
+    return [(i, j, round(d, 3)) for i, j, d in
+            bond_pairs([a["xyz"] for a in atoms], [a["sym"] for a in atoms], [a["occ"] for a in atoms],
+                       [a["label"] for a in atoms], disorder_alternatives(struct))]
+
+
+def _sym_images(struct):
+    """label -> (n_ops, 3) fractional images of the asym-unit atom under every symop (the first
+    atom of a duplicated label wins), cached — the lookup table behind _sym_code."""
+    def build():
+        out = {}
+        for a in struct.atoms:
+            out.setdefault(a["label"], np.array([op.apply_to_xyz(list(a["frac"])) for op in struct.ops], float))
+        return out
+    return struct.memo(("sym_images",), build)
 
 
 def _sym_code(struct, label, frac):
     """checkCIF-style symmetry code 'n_pqr' for an atom image at `frac` generated from the
     asym-unit atom `label`: n = 1-based symop index, pqr = 5 + lattice translation.
     '.' = identity in the reference cell; '?' if not recoverable."""
-    asym = next((a for a in struct.atoms if a["label"] == label), None)
-    if asym is None:
+    base = _sym_images(struct).get(label)
+    if base is None:
         return "?"
     fr = np.asarray(frac, float)
-    for n, op in enumerate(struct.ops, 1):
-        base = np.array(op.apply_to_xyz(list(asym["frac"])), float)
-        t = np.round(fr - base)
-        if np.allclose(base + t, fr, atol=2e-2):
-            if n == 1 and np.allclose(t, 0):
-                return "."
-            return "%d_%d%d%d" % (n, 5 + int(t[0]), 5 + int(t[1]), 5 + int(t[2]))
-    return "?"
+    t = np.round(fr - base)                                          # (n_ops, 3) lattice parts
+    ok = np.all(np.abs(base + t - fr) <= 2e-2 + 1e-5 * np.abs(fr), axis=1)   # np.allclose(atol=2e-2)
+    if not ok.any():
+        return "?"
+    n = int(np.argmax(ok))
+    if n == 0 and np.all(np.abs(t[0]) <= 1e-8):
+        return "."
+    return "%d_%d%d%d" % (n + 1, 5 + int(t[n, 0]), 5 + int(t[n, 1]), 5 + int(t[n, 2]))
 
 
 # --------------------------------------------------------------------- geometry (Block B)
@@ -3760,37 +4137,18 @@ def geometry(struct, cfg):
     radii ±0.25 A). This is a COARSE sanity bound, NOT a Mogul/CSD percentile (Mogul is
     licensed/unavailable — don't overclaim distributional rigour). Disorder-aware; bonds are
     deduped to unique (label-pair, length) types over the cell + nearest neighbours."""
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
-    alt = disorder_alternatives(struct)
-    origin = struct.cart(np.zeros(3))
-    sup = []
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    sup.append({"sym": a["sym"], "label": a["label"], "occ": a["occ"],
-                                "xyz": a["xyz"] + shift})
+    sup = supercell(struct)
     rows, seen, n_out = [], set(), 0
-    for a in cell_atoms:
-        for b in sup:
-            dd = float(np.linalg.norm(a["xyz"] - b["xyz"]))
-            if dd <= 0.4:
-                continue
-            cs = _covsum(a["sym"], b["sym"])
-            if dd > cs + BOND_TOL:
-                continue
-            if a["occ"] < 1 and b["occ"] < 1 and dd < DISORDER_MIN:
-                continue                                          # mutually-exclusive disorder (near-coincident)
-            if b["label"] in alt.get(a["label"], set()):
-                continue                                          # disorder alternative (incl. group-tagged)
-            key = tuple(sorted([a["label"], b["label"]]) + [round(dd, 2)])
+    for a in cell_atoms(struct):
+        for j, dd in sup.bonded_to(a):
+            cs = _covsum(a["sym"], sup.sym[j])
+            key = tuple(sorted([a["label"], sup.label[j]]) + [round(dd, 2)])
             if key in seen:
                 continue
             seen.add(key)
             outlier = abs(dd - cs) > GEOM_OUTLIER
             n_out += int(outlier)
-            rows.append({"a": a["label"], "b": b["label"], "len": round(dd, 3),
+            rows.append({"a": a["label"], "b": sup.label[j], "len": round(dd, 3),
                          "covsum": round(cs, 3), "outlier": outlier})
     f = [("INFO", f"Block B: {len(rows)} unique bonds, {n_out} outside the covalent envelope "
                   f"(±{GEOM_OUTLIER} A; coarse bound, not Mogul)")]
@@ -3852,77 +4210,38 @@ def hbonds(struct, cfg):
     classified by D...A (Jeffrey). Donor/acceptor sets are separate (cfg). Sub-floor
     contacts are demoted, not reported as H-bonds. Cross-checks the CIF's _geom_hbond
     loop on D...A (normalization-invariant) where present."""
-    g = _gemmi()
-    donors = set(cfg.hbond_donors) | ({"C"} if cfg.hbond_weak else set())
-    acceptors = set(cfg.hbond_acceptors)
+    donors, acceptors = hbond_sets(cfg)
     floor = cfg.hbond_angle_min
-    alt = disorder_alternatives(struct)
     dis_pairs = set()
     f = []
     if cfg.hbond_weak and floor >= 120.0:
         f.append(("INFO", "weak donors enabled but angle floor still 120 deg — most weak "
                           "H-bonds are bent; consider lowering hbond_angle_min toward 90"))
 
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
-    Hs = [a for a in cell_atoms if a["sym"] == "H"]
-
-    # 3x3x3 supercell of HEAVY atoms: the donor search must see molecules that straddle
-    # the cell boundary (not just the [0,1) image, or O-H donors on a boundary-spanning
-    # molecule are missed) + the acceptor subset for the contact search.
-    sup_heavy, sup_acc = [], []
-    origin = struct.cart(np.zeros(3))
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    if a["sym"] == "H":
-                        continue
-                    rec = {"sym": a["sym"], "label": a["label"], "cell": (di, dj, dk),
-                           "frac": a["frac"] + np.array([di, dj, dk], float), "xyz": a["xyz"] + shift}
-                    sup_heavy.append(rec)
-                    if a["sym"] in acceptors:
-                        sup_acc.append(rec)
-
+    # 3x3x3 supercell: the donor search must see molecules that straddle the cell boundary
+    # (not just the [0,1) image, or O-H donors on a boundary-spanning molecule are missed);
+    # acceptors are searched within the 4.0 A D...A ceiling of hbond_geometry.
+    sup = supercell(struct)
     results, seen, contacts, seen_c = [], set(), [], set()
-    for h in Hs:
-        if not sup_heavy:
-            break
-        D = min(sup_heavy, key=lambda a: np.linalg.norm(a["xyz"] - h["xyz"]))
-        dDH = float(np.linalg.norm(D["xyz"] - h["xyz"]))
-        if dDH > _covsum(D["sym"], "H") + BOND_TOL or D["sym"] not in donors:
+    hs = (sup.atom(i) for i in sup.home if sup.sym[i] == "H")     # the reference cell's hydrogens
+    for h, k, j, geo in iter_hbond_candidates(sup, hs, cfg):
+        if geo["kind"] == "disorder":                     # acceptor is a disorder-alternative of the donor
+            dis_pairs.add((sup.label[k], sup.label[j]))
             continue
-        hpos = h["xyz"]
-        if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
-            hpos = D["xyz"] + (h["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
-        altD = alt.get(D["label"], set())
-        for A in sup_acc:
-            DA = float(np.linalg.norm(A["xyz"] - D["xyz"]))
-            if DA < 0.4 or DA > 4.0:
-                continue
-            if A["label"] in altD:                        # acceptor is a disorder-alternative of the donor
-                dis_pairs.add((D["label"], A["label"]))
-                continue
-            HA = float(np.linalg.norm(A["xyz"] - hpos))
-            if HA > _vdw("H") + _vdw(A["sym"]):
-                continue
-            ang = _angle(D["xyz"], hpos, A["xyz"])
-            rec = {"D": D["label"], "Dsym": D["sym"], "H": h["label"],
-                   "A": A["label"], "Asym": A["sym"], "DH": round(dDH, 3),
-                   "HA": round(HA, 3), "DA": round(DA, 3), "angle": round(ang, 1),
-                   "class": next((k for lo, hi, k in JEFFREY if lo <= DA < hi), "long"),
-                   "sym": _sym_code(struct, A["label"], A["frac"]), "cell": A["cell"]}
-            if ang < floor:                               # below the floor: geometric contact, not an asserted H-bond
-                if ang >= GEOM_CONTACT_MIN:
-                    ck = (D["label"], h["label"], A["label"], round(DA, 2))
-                    if ck not in seen_c:
-                        seen_c.add(ck); rec["class"] = "contact"; contacts.append(rec)
-                continue
-            key = (D["label"], h["label"], A["label"], round(DA, 2))
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(rec)
+        if geo["kind"] in ("far", "bent"):
+            continue
+        key = (sup.label[k], h["label"], sup.label[j], round(geo["DA"], 2))
+        bucket, seen_k = (contacts, seen_c) if geo["kind"] == "contact" else (results, seen)
+        if key in seen_k:
+            continue
+        seen_k.add(key)
+        A = sup.rec(j)
+        bucket.append({"D": sup.label[k], "Dsym": sup.sym[k], "H": h["label"],
+                       "A": A["label"], "Asym": A["sym"], "DH": round(geo["DH"], 3),
+                       "HA": round(geo["HA"], 3), "DA": round(geo["DA"], 3), "angle": round(geo["angle"], 1),
+                       "class": ("contact" if geo["kind"] == "contact" else
+                                 next((c for lo, hi, c in JEFFREY if lo <= geo["DA"] < hi), "long")),
+                       "sym": _sym_code(struct, A["label"], A["frac"]), "cell": A["cell"]})
 
     # cross-check the CIF's own _geom_hbond loop (D...A is normalization-invariant)
     xref = {"rows": 0, "matched": 0}
@@ -3947,7 +4266,7 @@ def hbonds(struct, cfg):
     f.insert(0, ("INFO", f"{len(results)} H-bonds + {len(contacts)} geometric contacts "
                          f"(donors={sorted(donors)}, acceptors={sorted(acceptors)}, floor={floor:.0f} deg)"))
     _resolve(f, cfg, "hbonds")
-    return {"bonds": results, "contacts": contacts, "xref": xref}
+    return {"bonds": results, "contacts": contacts, "xref": xref, "suppressed": sorted(dis_pairs)}
 
 
 # --------------------------------------------------------------------- validate + table
@@ -4063,7 +4382,16 @@ setup_scatter), and peak_width is in Q (A^-1), NOT degrees. Cross-checked agains
 (or a Bragg-law fallback). Validated in skill_validation/dans_fix.py (ELAINM: 47 peaks,
 Dans vs pymatgen top peak 0.011 deg).
 
+The Dans crystal, its powder computation (structure factors), the pymatgen cross-check and the
+cell-metric reflection list are memoised ON THE STRUCTURE (`Structure.memo`), keyed by every
+parameter that changes the result (wavelength, 2theta window, peak width, Lorentz fraction; the
+CIF is the one the structure was loaded from), so calc_pattern / reflection_list / peak_table /
+realistic_pattern parse and compute each once per (struct, settings). plot_overlay_patterns
+accepts loaded Structures for the same reason.
+
     calc_pattern(struct, cfg)             -> {two_theta, intensity, wavelength, peaks}
+    reflection_list(struct, cfg)          -> [(2theta, I, (h,k,l)), ...] real structure factors
+    realistic_pattern(struct, cfg)        -> Kalpha2 / PO / Caglioti on top of reflection_list
     plot(struct, cfg, experimental=None)  -> (fig, ax, pattern)   via spectra pxrd axis
 """
 
@@ -4075,6 +4403,62 @@ def _wavelength(struct, cfg):
     if wl:
         return float(wl), "CIF"
     return 1.5406, "fallback Cu-Ka1 (CIF declared none)"
+
+
+def _dans():
+    try:
+        import Dans_Diffraction as dif
+    except ImportError as e:
+        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
+                          "    python -m pip install Dans-Diffraction") from e
+    return dif
+
+
+def _window(cfg):
+    return float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max)
+
+
+def _dans_crystal(struct):
+    """dif.Crystal of the structure's own CIF, parsed once per structure."""
+    return struct.memo(("dans",), lambda: _dans().Crystal(struct.path))
+
+
+def _powder(struct, cfg):
+    """Dans powder computation at the cfg settings — (two_theta, raw intensity, reflection
+    array), computed ONCE per (wavelength, window, peak width, Lorentz fraction) and memoised on
+    struct. Returns copies of the profile arrays, so callers may normalise in place."""
+    wl, _src = _wavelength(struct, cfg)
+
+    def compute():
+        xtl = _dans_crystal(struct)
+        xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl,
+                                  powder_units="twotheta",
+                                  min_twotheta=cfg.pxrd_two_theta_min,
+                                  max_twotheta=cfg.pxrd_two_theta_max,
+                                  powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
+        # peak_width is in Q (A^-1), NOT degrees; min_twotheta keeps the (000) at 0 off-grid
+        tt, inten, refl = xtl.Scatter.powder("xray", units="tth",
+                                             peak_width=cfg.pxrd_peak_width,
+                                             lorentz_fraction=cfg.pxrd_lorentz_fraction)
+        return np.asarray(tt, float), np.asarray(inten, float), np.asarray(refl, float)
+    tt, inten, refl = struct.memo(("powder", wl, *_window(cfg), float(cfg.pxrd_peak_width),
+                                   float(cfg.pxrd_lorentz_fraction)), compute)
+    return tt.copy(), inten.copy(), refl
+
+
+def _pymatgen_top(struct, cfg, wl):
+    """2theta of pymatgen's strongest reflection, once per (wavelength, window); None when
+    pymatgen is absent or fails (the caller falls back to the Bragg-law check)."""
+    def compute():
+        try:
+            from pymatgen.core import Structure as PMG
+            from pymatgen.analysis.diffraction.xrd import XRDCalculator
+            pat = XRDCalculator(wavelength=wl).get_pattern(
+                PMG.from_file(struct.path), two_theta_range=_window(cfg))
+            return float(pat.x[int(np.argmax(pat.y))])
+        except Exception:
+            return None
+    return struct.memo(("pmg", wl, *_window(cfg)), compute)
 
 
 def _find_peaks(tt, inten, height=2.0, distance=5):
@@ -4124,23 +4508,8 @@ def _bragg_nearest(struct, wl, tth, hmax=5):
 def calc_pattern(struct, cfg):
     """Dans_Diffraction powder pattern, (000) off-grid, at the declared wavelength.
     Gates the calc/cross-check agreement per cfg.pxrd_crosscheck."""
-    try:
-        import Dans_Diffraction as dif
-    except ImportError as e:
-        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
-                          "    python -m pip install Dans-Diffraction") from e
     wl, src = _wavelength(struct, cfg)
-    xtl = dif.Crystal(cfg.cif_path)
-    xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl,
-                              powder_units="twotheta",
-                              min_twotheta=cfg.pxrd_two_theta_min,
-                              max_twotheta=cfg.pxrd_two_theta_max,
-                              powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
-    # peak_width is in Q (A^-1), NOT degrees; min_twotheta keeps the (000) at 0 off-grid
-    tt, inten, _ = xtl.Scatter.powder("xray", units="tth",
-                                      peak_width=cfg.pxrd_peak_width,
-                                      lorentz_fraction=cfg.pxrd_lorentz_fraction)
-    tt, inten = np.asarray(tt, float), np.asarray(inten, float)
+    tt, inten, _refl = _powder(struct, cfg)
     if inten.size and inten.max() > 0:
         inten = inten / inten.max() * 100.0
     peaks = _find_peaks(tt, inten)
@@ -4155,16 +4524,9 @@ def calc_pattern(struct, cfg):
     if mode != "none" and not math.isnan(top):
         delta = method = other = None
         if mode in ("auto", "pymatgen"):
-            try:
-                from pymatgen.core import Structure as PMG
-                from pymatgen.analysis.diffraction.xrd import XRDCalculator
-                st = PMG.from_file(cfg.cif_path)
-                pat = XRDCalculator(wavelength=wl).get_pattern(
-                    st, two_theta_range=(cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max))
-                other = float(pat.x[int(np.argmax(pat.y))])
+            other = _pymatgen_top(struct, cfg, wl)
+            if other is not None:
                 delta, method = abs(top - other), "pymatgen"
-            except Exception:
-                pass
         if delta is None and mode in ("auto", "bragg"):
             gap = _bragg_nearest(struct, wl, top)
             if gap is not None:
@@ -4184,25 +4546,9 @@ def reflection_list(struct, cfg):
     already applied (Dans's `powder()` 3rd return: columns h,k,l,2theta,intensity, grouped by
     min_overlap). This is the correct input to `simulate_pattern` (feed it THESE, not
     the post-broadened peak list — that would double-broaden). Filtered to the cfg 2theta window."""
-    try:
-        import Dans_Diffraction as dif
-    except ImportError as e:
-        raise ImportError("Required package not found: Dans-Diffraction. Install with:\n"
-                          "    python -m pip install Dans-Diffraction") from e
-    wl, _ = _wavelength(struct, cfg)
-    xtl = dif.Crystal(cfg.cif_path)
-    xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl, powder_units="twotheta",
-                              min_twotheta=cfg.pxrd_two_theta_min, max_twotheta=cfg.pxrd_two_theta_max,
-                              powder_lorentz=cfg.pxrd_lorentz_fraction, output=False)
-    _, _, refl = xtl.Scatter.powder("xray", units="tth", peak_width=cfg.pxrd_peak_width,
-                                    lorentz_fraction=cfg.pxrd_lorentz_fraction)
-    refl = np.asarray(refl, float)
-    lo, hi = cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max
-    out = []
-    for h, k, l, tth, I in refl:
-        if lo <= tth <= hi and I > 0:
-            out.append((float(tth), float(I), (int(round(h)), int(round(k)), int(round(l)))))
-    return out
+    lo, hi = _window(cfg)
+    return [(float(tth), float(I), (int(round(h)), int(round(k)), int(round(l))))
+            for h, k, l, tth, I in _powder(struct, cfg)[2] if lo <= tth <= hi and I > 0]
 
 
 def realistic_pattern(struct, cfg, x_grid=None, npoints=3000):
@@ -4268,24 +4614,17 @@ def _all_reflections(struct, wl, tth_min, tth_max, hmax=None):
     d_min = wl / (2.0 * math.sin(math.radians(min(tth_max, 179.0) / 2.0)))
     hb, kb, lb = ((hmax,) * 3 if hmax is not None
                   else tuple(int(ax / d_min) + 1 for ax in (a, b, c)))
-    out = []
-    for h in range(-hb, hb + 1):
-        for k in range(-kb, kb + 1):
-            for l in range(-lb, lb + 1):
-                if (h, k, l) == (0, 0, 0):
-                    continue
-                hkl = np.array([h, k, l], float)
-                inv_d2 = float(hkl @ Gs @ hkl)
-                if inv_d2 <= 0:
-                    continue
-                d = 1.0 / math.sqrt(inv_d2)
-                s = wl / (2 * d)
-                if s >= 1.0:
-                    continue
-                t2 = 2 * math.degrees(math.asin(s))
-                if tth_min <= t2 <= tth_max:
-                    out.append((t2, (h, k, l), d))
-    return out
+    H = np.mgrid[-hb:hb + 1, -kb:kb + 1, -lb:lb + 1].reshape(3, -1).T.astype(float)   # h-major, like nested loops
+    inv_d2 = np.einsum("ni,ij,nj->n", H, Gs, H)
+    ok = (inv_d2 > 0) & np.any(H != 0, axis=1)
+    d = np.full(len(H), np.inf)
+    d[ok] = 1.0 / np.sqrt(inv_d2[ok])
+    s = wl / (2 * d)
+    ok &= s < 1.0
+    t2 = np.full(len(H), np.nan)
+    t2[ok] = 2 * np.degrees(np.arcsin(s[ok]))
+    ok &= (t2 >= tth_min) & (t2 <= tth_max)
+    return [(float(t2[i]), tuple(int(v) for v in H[i]), float(d[i])) for i in np.flatnonzero(ok)]
 
 
 def peak_table(struct, cfg, pattern=None, top=25):
@@ -4295,14 +4634,17 @@ def peak_table(struct, cfg, pattern=None, top=25):
     if pattern is None:
         pattern = calc_pattern(struct, cfg)
     wl = pattern["wavelength"]
-    refl = _all_reflections(struct, wl, cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max)
+    refl = struct.memo(("hkl", wl, *_window(cfg)), lambda: _all_reflections(struct, wl, *_window(cfg)))
+    tths = np.array([r[0] for r in refl], float)
     rows = []
     for tth, I in pattern["peaks"][:top]:
         th = math.radians(tth / 2.0)
         d = wl / (2 * math.sin(th)) if th > 0 else float("nan")
-        near = [r for r in refl if abs(r[0] - tth) < 0.10]
+        near = [refl[i] for i in np.flatnonzero(np.abs(tths - tth) < 0.10)]
         if near:
-            h, k, l = min(near, key=lambda r: (sum(abs(x) for x in r[1]), abs(r[0] - tth)))[1]
+            # lowest index sum, then nearest 2theta (to 1e-6 deg, so symmetry-equivalent indices at the
+            # same angle tie exactly instead of on rounding noise), then the first in h-major order
+            h, k, l = min(near, key=lambda r: (sum(abs(x) for x in r[1]), round(abs(r[0] - tth), 6)))[1]
             hkl = f"{h} {k} {l}"
         else:
             hkl = "?"
@@ -4325,9 +4667,11 @@ def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
     """Stacked calculated PXRD of several phases for phase ID (the cocrystal-vs-starting-materials
     figure), in the house waterfall idiom: **solid palette lines** (vertical position separates
     the traces) with the **right-margin per-trace key** (`edge_labels`), never labels over
-    the data. `entries` = list of (label, cif_path); each pattern is computed at the house pxrd
-    conventions and normalized to 100. `experimental` = (2theta, I) is drawn (grey) at the base.
-    Returns (fig, ax, patterns) — patterns is a list of (label, pattern dict)."""
+    the data. `entries` = list of (label, cif_path | loaded Structure) — pass Structures when the
+    same phases go into several figures, so their patterns are computed once (the cache lives on
+    the structure); each pattern is computed at the house pxrd conventions and normalized to 100.
+    `experimental` = (2theta, I) is drawn (grey) at the base. Returns (fig, ax, patterns) —
+    patterns is a list of (label, pattern dict)."""
     pcfg = replace(cfg, domain="pxrd")
     apply_style(pcfg)
     fig, ax = figure(pcfg)
@@ -4338,9 +4682,10 @@ def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
         if ey.size and ey.max() > 0:
             ey = ey / ey.max() * 100.0
         traces.append(("experimental", ex, ey, "0.3"))
-    for i, (label, path) in enumerate(entries):
-        ecfg = replace(pcfg, cif_path=path)
-        s = load(ecfg)
+    for i, (label, src) in enumerate(entries):
+        loaded = isinstance(src, Structure)
+        ecfg = replace(pcfg, cif_path=src.path if loaded else src)
+        s = src if loaded else load(ecfg)
         pat = calc_pattern(s, ecfg)
         patterns.append((label, pat))
         traces.append((label, np.asarray(pat["two_theta"], float),
@@ -4373,6 +4718,11 @@ gates); custom / vector / axis angles are first-class because they're equally re
     complete_molecules(struct, cfg)   grow whole molecules across symmetry (don't orient a fragment)
     orient(struct, cfg, atoms)        -> (R, (elev,azim,roll), findings)  the deterministic camera
     render(struct, cfg)               -> (fig, ax)   element-coloured, bonds + dashed H-bonds + labels
+
+Every bond and H-bond drawn here comes from is_bonded / bond_pairs and
+iter_hbond_candidates / hbond_geometry (the same predicates and traversal that build the
+validation table, disorder exclusions included), applied through ONE Supercell
+per rendered cluster; nothing is re-derived in this module.
 """
 
 # CPK / element colours (recognizable); labels carry identity so colour is redundant.
@@ -4394,7 +4744,7 @@ def _bond_color(sym):
 
 def _size(sym):
     try:
-        r = _gemmi().Element(sym).covalent_r or 0.7
+        r = _cov_r(sym) or 0.7
     except Exception:
         r = 0.7
     return float(40.0 * r * r)             # area ~ radius^2, readable at print size
@@ -4405,18 +4755,8 @@ def complete_molecules(struct, cfg):
     """Grow the asymmetric-unit fragments into whole molecules by following covalent bonds
     across a 3x3x3 neighbourhood (so an inversion-centre half-molecule is completed, and a
     boundary-straddling molecule is made whole) — PCA must orient a real molecule, not an
-    AU fragment. Disorder-aware (mutually-exclusive partial sites aren't bonded)."""
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
-    alt = disorder_alternatives(struct)
-    origin = struct.cart(np.zeros(3))
-    sup = []
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    sup.append({"sym": a["sym"], "label": a["label"], "occ": a["occ"],
-                                "xyz": a["xyz"] + shift})
+    AU fragment. Bonds by is_bonded (disorder-aware) over the cached supercell."""
+    sup = supercell(struct)
 
     def k(p):
         return (int(round(p[0] * 50)), int(round(p[1] * 50)), int(round(p[2] * 50)))
@@ -4432,96 +4772,65 @@ def complete_molecules(struct, cfg):
     while frontier:
         nxt = []
         for a in frontier:
-            for s in sup:
-                kk = k(s["xyz"])
+            for j, _d in sup.bonded_to(a):
+                kk = k(sup.xyz[j])
                 if kk in have:
                     continue
-                d = float(np.linalg.norm(a["xyz"] - s["xyz"]))
-                if not (0.4 < d <= _covsum(a["sym"], s["sym"]) + BOND_TOL):
-                    continue
-                if a["occ"] < 1 and s["occ"] < 1 and d < DISORDER_MIN:
-                    continue
-                if s["label"] in alt.get(a["label"], set()):       # disorder-alternative -> not bonded
-                    continue
                 have.add(kk)
-                chosen.append(s)
-                nxt.append(s)
+                rec = sup.rec(j)
+                chosen.append(rec)
+                nxt.append(rec)
         frontier = nxt
     return chosen
 
 
-def _hide_ch(atoms):
-    heavy = [a for a in atoms if a["sym"] != "H"]
+# ------------------------------------------------------- the rendered cluster as a block
+def _cluster(atoms, alt=None):
+    """The rendered cluster as ONE Supercell (KD-trees, disorder map). `alt` is
+    the disorder-alternative map — or an already-built Supercell of these atoms, which the
+    renderers pass so every search in one render shares a single block."""
+    return alt if isinstance(alt, Supercell) else Supercell.from_atoms(atoms, alt)
+
+
+def _hide_ch(atoms, alt=None):
+    """Drop hydrogens whose nearest heavy atom is a bonded carbon (view_hide_ch)."""
+    blk = _cluster(atoms, alt)
     out = []
     for a in atoms:
-        if a["sym"] == "H" and heavy:
-            D = min(heavy, key=lambda h: np.linalg.norm(h["xyz"] - a["xyz"]))
-            if D["sym"] == "C" and np.linalg.norm(D["xyz"] - a["xyz"]) <= _covsum("C", "H") + BOND_TOL:
+        if a["sym"] == "H":
+            k = blk.nearest_heavy(a["xyz"])
+            if k is not None and blk.sym[k] == "C" and is_bonded(
+                    "C", "H", float(np.linalg.norm(blk.xyz[k] - a["xyz"])), blk.occ[k], a["occ"],
+                    blk.label[k], a["label"], blk.alt):
                 continue
         out.append(a)
     return out
 
 
 def _bond_pairs(atoms, alt=None):
-    xyz = [a["xyz"] for a in atoms]
-    out = []
-    for i in range(len(atoms)):
-        for j in range(i + 1, len(atoms)):
-            d = float(np.linalg.norm(xyz[i] - xyz[j]))
-            if 0.4 < d <= _covsum(atoms[i]["sym"], atoms[j]["sym"]) + BOND_TOL:
-                if atoms[i]["occ"] < 1 and atoms[j]["occ"] < 1 and d < DISORDER_MIN:
-                    continue
-                if alt and atoms[j]["label"] in alt.get(atoms[i]["label"], set()):
-                    continue                                  # disorder alternative -> not bonded
-                out.append((i, j))
-    return out
+    """(i, j) covalent bonds within the rendered cluster, by bond_pairs."""
+    return [(i, j) for i, j, _d in _cluster(atoms, alt).bond_pairs()]
 
 
-def _hbond_pairs(atoms, cfg):
-    """(donor_idx, acceptor_idx) for dashed lines, by the engine's criteria within the
-    rendered cluster (same rule as hbonds -> the figure can't assert a bond
-    the table wouldn't)."""
-    donors = set(cfg.hbond_donors) | ({"C"} if cfg.hbond_weak else set())
-    acc = set(cfg.hbond_acceptors)
-    heavy = [a for a in atoms if a["sym"] != "H"]
-    out = []
-    for hi, h in enumerate(atoms):
-        if h["sym"] != "H" or not heavy:
-            continue
-        D = min(heavy, key=lambda a: np.linalg.norm(a["xyz"] - h["xyz"]))
-        dDH = float(np.linalg.norm(D["xyz"] - h["xyz"]))
-        if dDH > _covsum(D["sym"], "H") + BOND_TOL or D["sym"] not in donors:
-            continue
-        hpos = h["xyz"]
-        if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
-            hpos = D["xyz"] + (h["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
-        for ai, a in enumerate(atoms):
-            if a["sym"] not in acc:
-                continue
-            DA = float(np.linalg.norm(a["xyz"] - D["xyz"]))
-            if DA < 0.4 or DA > 4.0:
-                continue
-            if np.linalg.norm(a["xyz"] - hpos) > _vdw("H") + _vdw(a["sym"]):
-                continue
-            if _angle(D["xyz"], hpos, a["xyz"]) < cfg.hbond_angle_min:
-                continue
-            out.append((hi, ai))     # dashed line starts at the HYDROGEN (H...A), not the donor O/N
-    return out
+def _hbond_records(atoms, cfg, alt=None):
+    """(h_idx, donor_idx, acceptor_idx) for every asserted D-H...A within the rendered cluster,
+    by iter_hbond_candidates — the table's traversal and criteria, disorder
+    exclusion included, so the figure can't assert a bond the table wouldn't. The renderers
+    compute this ONCE and derive the dashed lines, the roll and the label set from it."""
+    blk = _cluster(atoms, alt)
+    idx = {id(a): i for i, a in enumerate(atoms)}
+    return [(idx[id(h)], k, j) for h, k, j, geo in
+            iter_hbond_candidates(blk, (a for a in atoms if a["sym"] == "H"), cfg)
+            if geo["kind"] == "hbond"]
 
 
-def _hbond_label_set(atoms, cfg):
-    """Atom indices to label under view_label_atoms='hbond': the DONOR heavy atom and the ACCEPTOR
-    of each H-bond — i.e. only the atoms that make the synthon (the bridging H stays unlabelled).
-    Empty set if the rendered cluster has no H-bonds."""
-    idx = set()
-    for hi, ai in _hbond_pairs(atoms, cfg):
-        idx.add(ai)
-        h = atoms[hi]["xyz"]
-        donor = min((j for j, a in enumerate(atoms) if a["sym"] != "H"),
-                    key=lambda j: float(np.linalg.norm(atoms[j]["xyz"] - h)), default=None)
-        if donor is not None:
-            idx.add(donor)
-    return idx
+def _hbond_pairs(atoms, cfg, alt=None):
+    """(hydrogen_idx, acceptor_idx) for the dashed H...A lines (see _hbond_records)."""
+    return [(hi, ai) for hi, _di, ai in _hbond_records(atoms, cfg, alt)]
+
+
+def _label_set(records):
+    return {i for _hi, di, ai in records for i in (di, ai)}
 
 
 # ------------------------------------------------------------------ orientation
@@ -4544,12 +4853,13 @@ def _view_axis(struct, cfg, P):
     return (d / n if n else evecs[:, 0]), evals
 
 
-def orient(struct, cfg, atoms):
+def orient(struct, cfg, atoms, hbonds=None):
     """Return (R, (elev,azim,roll), findings). For pca/axis/vector R rotates coords into a
     view frame (z = line of sight, x = largest in-plane spread) and the camera looks straight
     down z; the in-plane roll aligns the H-bond network (or long axis) horizontal. For
     'custom' R is None and the given angles are used. view_tilt nudges any base. det(R)=+1
-    keeps a proper rotation (no mirror -> correct enantiomorph)."""
+    keeps a proper rotation (no mirror -> correct enantiomorph). `hbonds` = the cluster's
+    _hbond_pairs when the caller already has them (renders compute them once)."""
     f = []
     heavy = [a for a in atoms if a["sym"] != "H"]
     P = np.array([a["xyz"] for a in (heavy or atoms)])
@@ -4573,7 +4883,7 @@ def orient(struct, cfg, atoms):
     # roll: align the mean in-plane D->A H-bond vector horizontal (else long axis horizontal)
     theta = 0.0
     if cfg.view_roll_objective == "hbond":
-        hb = _hbond_pairs(atoms, cfg)
+        hb = hbonds if hbonds is not None else _hbond_pairs(atoms, cfg)
         vecs = [atoms[a]["xyz"] - atoms[d]["xyz"] for d, a in hb]
         if vecs:
             inplane = np.array([[v @ x, v @ y] for v in vecs])
@@ -4622,16 +4932,10 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
     """Zero-dependency FALLBACK renderer (matplotlib 3D). matplotlib has no depth buffer,
     so atom/bond occlusion at vertices is imperfect (small white wedges) — prefer the
     pyvista backend for publication output. Returns (fig, ax)."""
-    if atoms is None:
-        atoms = complete_molecules(struct, cfg)
-    if cfg.view_hide_ch:
-        atoms = _hide_ch(atoms)
-    if len(atoms) < 2:
-        raise ValueError("render: fewer than 2 atoms after completion")
-    R, view, findings = orient(struct, cfg, atoms)
+    atoms, blk, hbonds, hbset = _prepare(struct, cfg, atoms)
+    R, view, findings = orient(struct, cfg, atoms, hbonds)
     _resolve(findings, cfg, "orientation")
-    alt = disorder_alternatives(struct)
-    desat = _desat_mask(atoms, alt) if getattr(cfg, "color_by_component", False) else {}
+    desat = _desat_mask(atoms, blk) if cfg.color_by_component else {}
 
     P = np.array([a["xyz"] for a in atoms])
     Pc = P - P.mean(0)
@@ -4639,8 +4943,7 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
 
     apply_style(cfg)
     fig, ax = figure(cfg, subplot_kw={"projection": "3d"})
-    bonds = _bond_pairs(atoms, alt)
-    for i, j in bonds:
+    for i, j in _bond_pairs(atoms, blk):
         ci = _desat(_rgb(_bond_color(atoms[i]["sym"]))) if desat.get(id(atoms[i])) else _bond_color(atoms[i]["sym"])
         cj = _desat(_rgb(_bond_color(atoms[j]["sym"]))) if desat.get(id(atoms[j])) else _bond_color(atoms[j]["sym"])
         full = np.array([Pr[i], Pr[j]])
@@ -4653,7 +4956,7 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
             seg = np.array([Pr[i], mid])
             ax.plot(seg[:, 0], seg[:, 1], seg[:, 2], color=ci, lw=2.0,
                     solid_capstyle="round", zorder=1)
-    for hi, ai in _hbond_pairs(atoms, cfg):                  # dashed H...A (from the hydrogen)
+    for hi, ai in hbonds:                                    # dashed H...A (from the hydrogen)
         seg = np.array([Pr[hi], Pr[ai]])
         ax.plot(seg[:, 0], seg[:, 1], seg[:, 2], color="0.25", lw=0.9, ls=(0, (4, 3)), zorder=2)
     for a, p in zip(atoms, Pr):
@@ -4661,7 +4964,6 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
         ax.scatter(p[0], p[1], p[2], s=_size(a["sym"]), color=col,
                    edgecolors="k", linewidths=0.3, depthshade=True, zorder=3)
     if cfg.view_label_atoms != "none":
-        hbset = _hbond_label_set(atoms, cfg) if cfg.view_label_atoms == "hbond" else None
         labelled = set()
         for i, (a, p) in enumerate(zip(atoms, Pr)):
             sup = a.get("sup")
@@ -4673,7 +4975,7 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
                 from matplotlib import patheffects as _pe
                 txt = f"$\\mathrm{{{a['label']}}}^{{\\mathrm{{{sup}}}}}$" if sup else a["label"]
                 ax.text(p[0], p[1], p[2], txt, color="black", zorder=4,
-                        fontsize=6.0 * getattr(cfg, "view_label_size", 1.0),
+                        fontsize=6.0 * cfg.view_label_size,
                         path_effects=[_pe.withStroke(linewidth=2.5, foreground="white")])
                 labelled.add((a["label"], sup))
 
@@ -4705,7 +5007,7 @@ def _rgb(hexstr):
 
 
 def _choose_backend(cfg):
-    want = getattr(cfg, "view_renderer", "auto")
+    want = cfg.view_renderer
     if want == "matplotlib":
         return "matplotlib"
     try:
@@ -4750,7 +5052,7 @@ def _overlay_labels(pl, img, sel, res, cfg):
     ren = pl.renderer
     arr = img[..., :3].copy(); H = arr.shape[0]
     pim = Image.fromarray(arr); draw = ImageDraw.Draw(pim)
-    fpx = max(12, int(res / 55 * getattr(cfg, "view_label_size", 1.0)))
+    fpx = max(12, int(res / 55 * cfg.view_label_size))
     try:
         font = ImageFont.truetype(fm.findfont("DejaVu Sans"), fpx)
     except Exception:
@@ -4761,7 +5063,7 @@ def _overlay_labels(pl, img, sel, res, cfg):
         subfont = ImageFont.truetype(fm.findfont("DejaVu Sans"), sub_fpx)
     except Exception:
         subfont = font
-    gap = 0.6 * fpx if getattr(cfg, "view_label_offset", False) else 0.0
+    gap = 0.6 * fpx if cfg.view_label_offset else 0.0
     anchor = "lm" if gap else "mm"
     for ent in sel:
         lab, p = ent[0], ent[1]
@@ -4790,16 +5092,29 @@ def _desat_mask(atoms, alt):
     """{id(atom): True} for atoms NOT in the largest molecule — so color_by_component keeps the
     largest component (the 'main' molecule) in full element colour and mutes the rest (the
     coformer/solvent). Empty (no muting) when there's a single component."""
-    comps = _components(atoms, alt)
+    comps = _component_indices(_cluster(atoms, alt))
     if len(comps) < 2:
         return {}
     mx = max(len(c) for c in comps)
-    mask = {}
-    for c in comps:
-        muted = len(c) < mx
-        for a in c:
-            mask[id(a)] = muted
-    return mask
+    return {id(atoms[i]): len(c) < mx for c in comps for i in c}
+
+
+def _prepare(struct, cfg, atoms):
+    """The shared front half of both renderers: the cluster (default: the completed molecules),
+    C-H hiding, ONE Supercell over it, and from that block — once — the dashed H-bond pairs
+    and the synthon label set. Returns (atoms, blk, hbonds, hbset)."""
+    alt = disorder_alternatives(struct)
+    if atoms is None:
+        atoms = complete_molecules(struct, cfg)
+    if cfg.view_hide_ch:
+        atoms = _hide_ch(atoms, alt)
+    if len(atoms) < 2:
+        raise ValueError("render: fewer than 2 atoms after completion")
+    blk = Supercell.from_atoms(atoms, alt)
+    records = _hbond_records(atoms, cfg, blk)
+    hbonds = [(hi, ai) for hi, _di, ai in records]
+    hbset = _label_set(records) if cfg.view_label_atoms == "hbond" else None
+    return atoms, blk, hbonds, hbset
 
 
 def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
@@ -4808,13 +5123,8 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
     from the orientation engine. `atoms` overrides the default complete-molecule set; `cell_box`
     draws the unit-cell edges + a/b/c. Returns an RGB ndarray with halo labels composited."""
     import pyvista as pv
-    if atoms is None:
-        atoms = complete_molecules(struct, cfg)
-    if cfg.view_hide_ch:
-        atoms = _hide_ch(atoms)
-    if len(atoms) < 2:
-        raise ValueError("crystal_view: fewer than 2 atoms after completion")
-    R, _, findings = orient(struct, cfg, atoms)
+    atoms, blk, hbonds, hbset = _prepare(struct, cfg, atoms)
+    R, _, findings = orient(struct, cfg, atoms, hbonds)
     P = np.array([a["xyz"] for a in atoms])
     ctr = P.mean(0)
     if R is None:                          # 'custom' angles target the matplotlib backend
@@ -4830,29 +5140,28 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
                                  "pyvista used a PCA camera (use view_orientation='vector' "
                                  "for an explicit pyvista view)"))
     _resolve(findings, cfg, "orientation")
-    alt = disorder_alternatives(struct)
-    desat = _desat_mask(atoms, alt) if getattr(cfg, "color_by_component", False) else {}
+    desat = _desat_mask(atoms, blk) if cfg.color_by_component else {}
 
-    res = int(getattr(cfg, "view_resolution", 1800))
+    res = int(cfg.view_resolution)
     pl = pv.Plotter(off_screen=True, window_size=[res, res], lighting="light kit")
     pl.set_background("white")
 
     def crad(sym):
         try:
-            r = _gemmi().Element(sym).covalent_r or 0.7
+            r = _cov_r(sym) or 0.7
         except Exception:
             r = 0.7
         return 0.30 * (r / 0.7) + 0.08              # ball-and-stick: balls < vdW, H smaller
 
     sph = dict(smooth_shading=True, specular=0.3, specular_power=15)
     ellipsoid_mode = False
-    if getattr(cfg, "view_style", "ball_stick") == "ellipsoid":
+    if cfg.view_style == "ellipsoid":
         if has_adp(struct):
             ellipsoid_mode = True
         else:
             _resolve([("WARN", "view_style='ellipsoid' but no anisotropic U in the CIF "
                                       "(_atom_site_aniso_U_*) — drawing ball-and-stick")], cfg, "adp")
-    prob = getattr(cfg, "adp_probability", 0.5)
+    prob = cfg.adp_probability
     for a, p in zip(atoms, P):
         col = _rgb(_color(a["sym"]))
         if desat.get(id(a)):
@@ -4873,7 +5182,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
                 continue                                          # else fall through to a sphere
         pl.add_mesh(pv.Sphere(radius=crad(a["sym"]), center=p, theta_resolution=48,
                               phi_resolution=48), color=col, **sph)
-    for i, j in _bond_pairs(atoms, alt):
+    for i, j in _bond_pairs(atoms, blk):
         a_, b_ = P[i], P[j]; d = b_ - a_; L = float(np.linalg.norm(d)); mid = (a_ + b_) / 2
         ri, rj = _rgb(_bond_color(atoms[i]["sym"])), _rgb(_bond_color(atoms[j]["sym"]))
         if desat.get(id(atoms[i])):
@@ -4887,7 +5196,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
             for c, q in ((ri, (a_ + mid) / 2), (rj, (b_ + mid) / 2)):
                 pl.add_mesh(pv.Cylinder(center=q, direction=d, radius=0.11, height=L / 2, resolution=28),
                             color=c, **sph)
-    for hi, ai in _hbond_pairs(atoms, cfg):          # dashed H...A (originates at the hydrogen)
+    for hi, ai in hbonds:                            # dashed H...A (originates at the hydrogen)
         a_, b_ = P[hi], P[ai]; d = b_ - a_; L = float(np.linalg.norm(d))
         n = max(3, int(L / 0.35))
         for t in range(0, n, 2):
@@ -4899,7 +5208,6 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
     # the render (below) so they sit at the atom without a box hiding the molecule.
     sel, seen = [], set()
     if cfg.view_label_atoms != "none":
-        hbset = _hbond_label_set(atoms, cfg) if cfg.view_label_atoms == "hbond" else None
         for i, (a, p) in enumerate(zip(atoms, P)):
             sup = a.get("sup")
             dk = (a["label"], sup)
@@ -4924,7 +5232,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
         pl.enable_anti_aliasing("ssaa")
     except Exception:
         pass
-    if getattr(cfg, "view_ssao", True):
+    if cfg.view_ssao:
         try:
             pl.enable_ssao()
         except Exception:
@@ -4965,68 +5273,42 @@ def save(rendered, basename, cfg):
 
 
 # ------------------------------------------------------------------- packing (Phase 2)
-def _components(atoms, alt=None):
-    """Connected components (whole molecules) of `atoms` by covalent bonds, disorder-aware."""
-    from scipy.spatial import cKDTree
-    n = len(atoms)
+def _component_indices(blk):
+    """Connected components (whole molecules) of a block by its covalent bonds (crystal_engine
+    .bond_pairs, disorder-aware): lists of block indices, each ascending, ordered by first atom."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    n = len(blk.xyz)
     if n == 0:
         return []
-    xyz = np.array([a["xyz"] for a in atoms])
-    parent = list(range(n))
+    pairs = blk.bond_pairs()
+    i = np.array([p[0] for p in pairs], int)
+    j = np.array([p[1] for p in pairs], int)
+    adj = coo_matrix((np.ones(len(i), bool), (i, j)), shape=(n, n))
+    _, lab = connected_components(adj, directed=False)
+    order = np.argsort(lab, kind="stable")
+    bounds = np.flatnonzero(np.diff(lab[order])) + 1
+    return [c.tolist() for c in np.split(order, bounds)]
 
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
-        return x
 
-    for i, j in cKDTree(xyz).query_pairs(r=2.6):
-        d = float(np.linalg.norm(xyz[i] - xyz[j]))
-        if d > _covsum(atoms[i]["sym"], atoms[j]["sym"]) + BOND_TOL:
-            continue
-        if atoms[i]["occ"] < 1 and atoms[j]["occ"] < 1 and d < DISORDER_MIN:
-            continue
-        if alt and atoms[j]["label"] in alt.get(atoms[i]["label"], set()):
-            continue                                          # disorder alternative -> not bonded
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
-    comps = {}
-    for idx in range(n):
-        comps.setdefault(find(idx), []).append(atoms[idx])
-    return list(comps.values())
+def _components(atoms, alt=None):
+    """Connected components (whole molecules) of `atoms`, as lists of atom dicts."""
+    return [[atoms[i] for i in c] for c in _component_indices(_cluster(atoms, alt))]
 
 
 def _pack_atoms(struct, cfg, cells=None):
     """WHOLE molecules whose CENTROID lies inside the (Nx,Ny,Nz) block — so a single cell shows
     exactly its Z formula units (each molecule ONCE), not every boundary fragment grown into a
     duplicate. Built over a -1..N+1 supercell, grouped into molecules, then centroid-filtered."""
-    nx, ny, nz = cells or getattr(cfg, "pack_cells", (1, 1, 1))
-    base = expand(struct)
-    if getattr(cfg, "cell_fill", "molecule") == "clip":   # literal cell contents, molecules cut at the outer box
-        out = []
-        for i in range(nx):
-            for j in range(ny):
-                for k in range(nz):
-                    t = np.array([i, j, k], float)
-                    for u in base:
-                        fr = u["frac"] + t
-                        out.append({"sym": u["sym"], "label": u["label"], "occ": u["occ"],
-                                    "frac": fr, "xyz": struct.cart(fr)})
-        return out
-    sup = []
-    for i in range(-1, nx + 1):
-        for j in range(-1, ny + 1):
-            for k in range(-1, nz + 1):
-                t = np.array([i, j, k], float)
-                for u in base:
-                    fr = u["frac"] + t
-                    sup.append({"sym": u["sym"], "label": u["label"], "occ": u["occ"],
-                                "frac": fr, "xyz": struct.cart(fr)})
+    nx, ny, nz = cells or cfg.pack_cells
+    if cfg.cell_fill == "clip":   # literal cell contents, molecules cut at the outer box
+        return supercell(struct, (0, 0, 0), (nx - 1, ny - 1, nz - 1)).records()
+    blk = supercell(struct, (-1, -1, -1), (nx, ny, nz))
     out = []
-    for comp in _components(sup, disorder_alternatives(struct)):
-        cen = np.mean([a["frac"] for a in comp], axis=0)
+    for comp in _component_indices(blk):
+        cen = blk.frac[comp].mean(axis=0)
         if (-1e-4 <= cen[0] < nx) and (-1e-4 <= cen[1] < ny) and (-1e-4 <= cen[2] < nz):
-            out.extend(comp)
+            out.extend(blk.rec(i) for i in comp)
     return out
 
 
@@ -5077,87 +5359,57 @@ def _hbond_env_atoms(struct, cfg, central=None):
         central = complete_molecules(struct, cfg)
     for a in central:
         a["neighbour"] = False
-    alt = disorder_alternatives(struct)
-    donors = set(cfg.hbond_donors) | ({"C"} if cfg.hbond_weak else set())
-    acc = set(cfg.hbond_acceptors)
-    floor = cfg.hbond_angle_min
-    cell_atoms = [{**u, "xyz": struct.cart(u["frac"])} for u in expand(struct)]
-    origin = struct.cart(np.zeros(3))
-    sup = []
-    for di in (-1, 0, 1):
-        for dj in (-1, 0, 1):
-            for dk in (-1, 0, 1):
-                shift = struct.cart(np.array([di, dj, dk], float)) - origin
-                for a in cell_atoms:
-                    sup.append({"sym": a["sym"], "label": a["label"], "occ": a["occ"],
-                                "frac": a["frac"] + np.array([di, dj, dk], float), "xyz": a["xyz"] + shift})
+    donors, acc = hbond_sets(cfg)
+    sup = supercell(struct)
 
     def key(p):
         return (int(round(p[0] * 50)), int(round(p[1] * 50)), int(round(p[2] * 50)))
 
     central_keys = {key(a["xyz"]) for a in central}
+    cacc_keys = {key(a["xyz"]) for a in central if a["sym"] in acc}
 
-    def hbond_ok(D, h, A):
-        dDH = float(np.linalg.norm(D["xyz"] - h["xyz"]))
-        if dDH > _covsum(D["sym"], "H") + BOND_TOL or D["sym"] not in donors:
-            return False
-        hpos = h["xyz"]
-        if cfg.xh_normalize and D["sym"] in NEUTRON_XH and dDH > 0:
-            hpos = D["xyz"] + (h["xyz"] - D["xyz"]) / dDH * NEUTRON_XH[D["sym"]]
-        DA = float(np.linalg.norm(A["xyz"] - D["xyz"]))
-        if not (0.4 < DA <= 4.0):
-            return False
-        if float(np.linalg.norm(A["xyz"] - hpos)) > _vdw("H") + _vdw(A["sym"]):
-            return False
-        return _angle(D["xyz"], hpos, A["xyz"]) >= floor
-
-    cheavy = [a for a in central if a["sym"] != "H"]
+    # Both directions run the engine's traversal over the 3x3x3 block: central hydrogens seed
+    # OUTSIDE acceptors; the hydrogens of every donor atom within the 4.0 A D...A ceiling of a
+    # central acceptor seed their OUTSIDE donor. (A central molecule's own atoms are excluded by
+    # position key, so intramolecular contacts never become neighbours.)
     seeds = []
-    for h in [a for a in central if a["sym"] == "H"]:               # central donor -> outside acceptor
-        if not cheavy:
-            break
-        D = min(cheavy, key=lambda a: np.linalg.norm(a["xyz"] - h["xyz"]))
-        for A in sup:
-            if A["sym"] in acc and key(A["xyz"]) not in central_keys and hbond_ok(D, h, A):
-                seeds.append(A)
-    supheavy = [a for a in sup if a["sym"] != "H"]
-    cacc = [a for a in central if a["sym"] in acc]
-    for h in [a for a in sup if a["sym"] == "H" and key(a["xyz"]) not in central_keys]:  # outside donor -> central acceptor
-        if not supheavy:
-            break
-        D = min(supheavy, key=lambda a: np.linalg.norm(a["xyz"] - h["xyz"]))
-        if any(hbond_ok(D, h, A) for A in cacc):
-            seeds.append(D)
+    for h, k, j, geo in iter_hbond_candidates(sup, (a for a in central if a["sym"] == "H"), cfg):
+        if geo["kind"] == "hbond" and key(sup.xyz[j]) not in central_keys:
+            seeds.append(sup.rec(j))
+    cand = set()
+    for a in central:
+        if a["sym"] in acc:
+            for k in sup.neighbours(a["xyz"], 4.0):
+                if sup.sym[k] in donors and key(sup.xyz[k]) not in central_keys:
+                    cand.update(j for j, _d in sup.bonded_to(sup.atom(k)) if sup.sym[j] == "H")
+    for h, k, j, geo in iter_hbond_candidates(sup, (sup.atom(i) for i in sorted(cand)), cfg):
+        if geo["kind"] == "hbond" and key(sup.xyz[j]) in cacc_keys:
+            seeds.append(sup.rec(k))
 
     # ---- assemble neighbour atoms at the requested extent
-    mode = getattr(cfg, "hbond_neighbour", "stub")
+    mode = cfg.hbond_neighbour
     seen_seed, seed_list = set(central_keys), []
-    for s in seeds:                                   # unique contact atoms (the seeds)
-        kk = key(s["xyz"])
+    for s_ in seeds:                                  # unique contact atoms (the seeds)
+        kk = key(s_["xyz"])
         if kk not in seen_seed:
-            seen_seed.add(kk); seed_list.append(s)
+            seen_seed.add(kk); seed_list.append(s_)
     have, neigh = set(central_keys), []
-    for s in seed_list:
-        have.add(key(s["xyz"])); neigh.append(s)
+    for s_ in seed_list:
+        have.add(key(s_["xyz"])); neigh.append(s_)
     if mode in ("stub", "whole"):                     # grow outward (1 shell for stub, fully for whole)
-        depth = {id(s): 0 for s in seed_list}
+        depth = {id(s_): 0 for s_ in seed_list}
         frontier = list(seed_list)
         while frontier:
             nf = []
             for a in frontier:
                 if mode == "stub" and depth[id(a)] >= 1:
                     continue
-                for s in sup:
-                    kk = key(s["xyz"])
-                    if kk in have or not (0.4 < float(np.linalg.norm(a["xyz"] - s["xyz"]))
-                                          <= _covsum(a["sym"], s["sym"]) + BOND_TOL):
+                for j, _d in sup.bonded_to(a):
+                    kk = key(sup.xyz[j])
+                    if kk in have:
                         continue
-                    if a["occ"] < 1 and s["occ"] < 1 and \
-                            float(np.linalg.norm(a["xyz"] - s["xyz"])) < DISORDER_MIN:
-                        continue
-                    if s["label"] in alt.get(a["label"], set()):   # disorder-alternative -> not bonded
-                        continue
-                    have.add(kk); neigh.append(s); nf.append(s); depth[id(s)] = depth[id(a)] + 1
+                    s_ = sup.rec(j)
+                    have.add(kk); neigh.append(s_); nf.append(s_); depth[id(s_)] = depth[id(a)] + 1
             frontier = nf
 
     # ---- annotate neighbours: symmetry code + roman superscript; log the caption key
@@ -5209,7 +5461,9 @@ intensities that seed the list; see `crystal.md` for wiring):
   march_dollase   preferred-orientation INTENSITY correction (platy / needle habit)
   kalpha2_doublet Cu Kα1/Kα2 peak SPLITTING (α2 at ~half intensity; splitting grows with angle)
   caglioti_fwhm + pseudo_voigt   angle-dependent peak WIDTH and shape
-  simulate_pattern  composes them onto a 2θ grid (defaults pulled from cfg)
+  simulate_pattern  composes them onto a 2θ grid (defaults pulled from cfg); each peak is
+                    evaluated only on a ±`window_fwhm` FWHM slice of the grid (searchsorted),
+                    so a refinement loop calling it hundreds of times stays cheap
 
 Nothing here computes structure factors or systematic absences — feed it real reflection
 intensities. Preferred orientation is the per-reflection-orientation form; a fully rigorous PO
@@ -5221,6 +5475,8 @@ closed-form in skill_validation/pxrd/.
 CU_KA1 = 1.540598
 CU_KA2 = 1.544426
 CU_KA2_RATIO = 0.5
+# Per-peak evaluation half-width for simulate_pattern, in FWHM units (see its docstring).
+DEFAULT_WINDOW_FWHM = 40.0
 
 
 def reciprocal_metric(a, b, c, al, be, ga):
@@ -5290,40 +5546,56 @@ def pseudo_voigt(x, center, fwhm, eta):
     eta=0 → Gaussian, eta=1 → Lorentzian. A reflection of intensity I contributes
     I·pseudo_voigt, so integrated area = I and the peak HEIGHT falls as the peak broadens
     (physically correct — the area is the structure-factor intensity)."""
-    x = np.asarray(x, float)
+    dx = np.asarray(x, float) - center
     hwhm = fwhm / 2.0
     sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
-    gauss = np.exp(-0.5 * ((x - center) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
-    lorentz = (hwhm / np.pi) / ((x - center) ** 2 + hwhm ** 2)
+    gauss = np.exp(-0.5 * (dx / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+    lorentz = (hwhm / np.pi) / (dx * dx + hwhm ** 2)
     return eta * lorentz + (1 - eta) * gauss
 
 
-def _pick(cfg, name, default, override):
+def _pick(cfg, name, override):
+    """Keyword override > declared cfg field. `cfg` is optional here (the validation suite calls
+    with cfg=None) and then resolves to the skill defaults, so the ONLY copy of each default is
+    the Config field — nothing here can drift from it; a misspelt name fails loudly."""
     if override is not None:
         return override
-    return getattr(cfg, name, default) if cfg is not None else default
+    return getattr(default_cfg(cfg), name)
 
 
 def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, eta=None,
                      kalpha2=None, lam1=CU_KA1, lam2=None, ratio=None,
-                     po_hkl=None, march_r=None, Gs=None, normalize=True):
+                     po_hkl=None, march_r=None, Gs=None, normalize=True,
+                     window_fwhm=DEFAULT_WINDOW_FWHM):
     """Build a realistic profile on `x_grid` (2θ deg) from a reflection list. Pipeline:
     March-Dollase (if po_hkl and r≠1 and Gs given) → Kα2 doublet (if kalpha2) → sum of
     area-normalized pseudo-Voigts with Caglioti(θ) widths. Unspecified parameters default from
     `cfg` (pxrd_caglioti → U,V,W; pxrd_lorentz_fraction → eta; pxrd_kalpha2 / pxrd_wavelength2 /
     pxrd_kalpha2_ratio; pxrd_po_axis → po_hkl; pxrd_march_r). Returns the intensity on `x_grid`
-    (scaled to 100 at the max when `normalize`)."""
-    uvw = _pick(cfg, "pxrd_caglioti", (0.01, -0.005, 0.008), None)
+    (scaled to 100 at the max when `normalize`).
+
+    `window_fwhm`: each reflection is evaluated only on the grid slice within ±window_fwhm·FWHM
+    of its centre (np.searchsorted on the sorted grid), not on the whole grid. None = full grid
+    (the exact sum). The truncated part is the far Lorentzian tail, area fraction
+    η·(1 − (2/π)·arctan(2·window_fwhm)) per peak — 0.40 % at the default 40 FWHM with η=0.5
+    (0.80 % for a pure Lorentzian). It is DROPPED, not renormalised: renormalising would raise
+    every on-grid value of the peak by that fraction and change peak heights, whereas dropping
+    leaves each peak bit-identical inside its window and only removes the smooth far-tail
+    pedestal that other peaks contribute at its position — a background-like term. Measured on a
+    real 328-line Cu Kα1/α2 aspirin list (3000-point 5–50° grid): max deviation from the full sum
+    1.8e-4 of the pattern maximum (2.6e-3 relative on peaks >5 % of max), below the ~1e-3
+    quantisation of a counted lab pattern; ±10 FWHM would already cost 2 % on weak peaks."""
+    uvw = _pick(cfg, "pxrd_caglioti", None)
     U = uvw[0] if U is None else U
     V = uvw[1] if V is None else V
     W = uvw[2] if W is None else W
-    eta = _pick(cfg, "pxrd_lorentz_fraction", 0.5, eta)
-    kalpha2 = _pick(cfg, "pxrd_kalpha2", False, kalpha2)
-    lam2 = _pick(cfg, "pxrd_wavelength2", None, lam2) or CU_KA2
-    ratio = _pick(cfg, "pxrd_kalpha2_ratio", CU_KA2_RATIO, ratio)
-    po_hkl = _pick(cfg, "pxrd_po_axis", None, po_hkl)
-    march_r = _pick(cfg, "pxrd_march_r", 1.0, march_r)
-    if cfg is not None and lam1 == CU_KA1 and getattr(cfg, "pxrd_wavelength", None):
+    eta = _pick(cfg, "pxrd_lorentz_fraction", eta)
+    kalpha2 = _pick(cfg, "pxrd_kalpha2", kalpha2)
+    lam2 = _pick(cfg, "pxrd_wavelength2", lam2) or CU_KA2
+    ratio = _pick(cfg, "pxrd_kalpha2_ratio", ratio)
+    po_hkl = _pick(cfg, "pxrd_po_axis", po_hkl)
+    march_r = _pick(cfg, "pxrd_march_r", march_r)
+    if lam1 == CU_KA1 and _pick(cfg, "pxrd_wavelength", None):
         lam1 = float(cfg.pxrd_wavelength)           # the α1 the reflection list was computed at
     if kalpha2 and abs(lam1 - CU_KA1) > 1e-3 and lam2 == CU_KA2:
         print(f"  [WARN] pxrd_realism: Kα2 doublet uses the Cu Kα2 line ({CU_KA2} Å) on an α1 of {lam1} Å - "
@@ -5340,8 +5612,20 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
 
     x = np.asarray(x_grid, float)
     y = np.zeros_like(x)
-    for tth, I, _hkl in refl:
-        y = y + I * pseudo_voigt(x, tth, float(caglioti_fwhm(tth, U, V, W)), eta)
+    if not refl or x.size == 0:
+        return y
+    w = np.inf if window_fwhm is None else float(window_fwhm)   # inf => slice (0, n) = the full sum
+    order = np.argsort(x, kind="stable")          # searchsorted needs an ascending grid
+    xs = x[order]
+    ys = np.zeros_like(xs)
+    tts = np.array([r[0] for r in refl], float)
+    fws = caglioti_fwhm(tts, U, V, W)             # one vectorised call, not one per reflection
+    i0s = np.searchsorted(xs, tts - w * fws)      # fw > 0 always (clamped), so inf*fw is never nan
+    i1s = np.searchsorted(xs, tts + w * fws)
+    for (tth, I, _hkl), fw, i0, i1 in zip(refl, fws, i0s, i1s):
+        if i1 > i0:
+            ys[i0:i1] += I * pseudo_voigt(xs[i0:i1], tth, float(fw), eta)
+    y[order] = ys
     if normalize and y.max() > 0:
         y = y / y.max() * 100.0
     return y
