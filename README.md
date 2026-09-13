@@ -187,12 +187,24 @@ $ python pectin_calibration_standalone.py      # the handed-over script, re-run 
 
 ## Install
 
-Clone into a Claude Code skills directory, user-level or per project:
+As a plugin, from inside Claude Code (two commands; the repo is its own marketplace):
+
+```
+/plugin marketplace add TheDop/analytical-figures-skill
+/plugin install analytical-figures@analytical-figures-marketplace
+```
+
+Or clone into a Claude Code skills directory, user-level or per project:
 
 ```
 git clone https://github.com/TheDop/analytical-figures-skill ~/.claude/skills/analytical-figures        # available in every project
 git clone https://github.com/TheDop/analytical-figures-skill .claude/skills/analytical-figures           # this project only
-python -m pip install -r ~/.claude/skills/analytical-figures/requirements.txt
+```
+
+Either way, install the Python side once:
+
+```
+python -m pip install -r requirements.txt        # from the cloned/installed skill directory
 ```
 
 `numpy` and `matplotlib` are required; `scipy` is strongly recommended. Everything else is
