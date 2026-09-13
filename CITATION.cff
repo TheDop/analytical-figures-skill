@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+message: "If this skill produced a figure or a number in your work, please cite it."
+type: software
+title: "analytical-figures: a Claude Code skill for publication-grade figures and gated analysis in analytical chemistry"
+authors:
+  - family-names: Baum
+    given-names: Uri
+version: "1.0"
+date-released: 2026-09-13
+license: MIT
+repository-code: "https://github.com/TheDop/analytical-figures-skill"
+url: "https://thedop.github.io/analytical-figures-skill/"
+abstract: >-
+  A Claude Code skill for analytical chemistry and spectroscopy that gates the data pipeline
+  before a figure is drawn (ingest checks, identical batch processing, named error statistics,
+  leakage-safe cross-validation, mandatory residual panels, a static critic for hand-typed
+  figures of merit) and hands over one self-contained, provenance-stamped Python script per
+  figure. Families: FTIR/ATR and PXRD spectra, univariate calibration with figures of merit
+  (LOD/LOQ, recovery, ICH Q2), multivariate calibration (PLS/PCR/PCA, DD-SIMCA), crystal
+  structures from CIFs (validation table, calculated and lab-realistic PXRD, deterministic 3D
+  views) and cocrystal identification.
+keywords:
+  - analytical chemistry
+  - spectroscopy
+  - FTIR
+  - PXRD
+  - calibration
+  - chemometrics
+  - crystallography
+  - cocrystal
+  - Claude Code
+  - reproducible figures

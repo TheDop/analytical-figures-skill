@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "analytical-figures",
+  "displayName": "Analytical Figures",
+  "description": "Publication-grade figures and the gated analysis behind them for analytical chemistry and spectroscopy: FTIR/ATR and PXRD spectra, calibration with LOD/LOQ and ICH Q2 figures of merit, PLS/PCR chemometrics, crystal structures from CIFs, cocrystal identification. Hands over one self-contained script per figure.",
+  "version": "1.0.0",
+  "author": { "name": "Uri Baum", "url": "https://github.com/TheDop" },
+  "homepage": "https://thedop.github.io/analytical-figures-skill/",
+  "repository": "https://github.com/TheDop/analytical-figures-skill",
+  "license": "MIT",
+  "keywords": ["analytical-chemistry", "spectroscopy", "ftir", "pxrd", "calibration", "chemometrics", "crystallography", "cocrystal", "figures"],
+  "skills": ["."]
+}

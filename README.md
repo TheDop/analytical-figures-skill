@@ -1,10 +1,15 @@
 # analytical-figures
 
-A [Claude Code](https://claude.com/claude-code) skill for **publication-grade figures and the
-gated analysis behind them** in analytical chemistry and spectroscopy: FTIR/ATR and PXRD spectra,
-calibration curves with figures of merit (LOD/LOQ, recovery, ICH Q2), multivariate calibration
-(PLS/PCR/PCA), crystal structures from CIFs (validation table, calculated PXRD, deterministic 3D
-views) and cocrystal identification.
+Ask [Claude Code](https://claude.com/claude-code) for a calibration curve from your `.spc` files
+and get a journal-ready figure with LOD/LOQ, confidence and prediction bands and a residual panel,
+plus one self-contained Python script that reproduces it. Ask for a calculated PXRD pattern from
+a CIF, a cocrystal-vs-physical-mixture call or PLS diagnostics with leakage-safe cross-validation
+and get the same: a figure that passed its checks, and the code that made it.
+
+`analytical-figures` is a Claude Code skill for analytical chemistry and spectroscopy: FTIR/ATR
+and PXRD spectra, calibration with figures of merit (LOD/LOQ, recovery, ICH Q2), multivariate
+calibration (PLS/PCR/PCA), crystal structures from CIFs (validation table, calculated PXRD,
+deterministic 3D views) and cocrystal identification.
 
 It is not a plotting tutorial. It does two things a plotting library does not:
 
