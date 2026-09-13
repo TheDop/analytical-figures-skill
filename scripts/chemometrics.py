@@ -49,6 +49,7 @@ imports it.
 flattens every module into one namespace, so module-level names must be unique.)
 """
 from __future__ import annotations
+import functools
 import numpy as np
 from . import style, verify
 
@@ -66,9 +67,12 @@ def _pls_cls():
 
 
 def _pca_cls():
+    """PCA with the deterministic full SVD pinned ONCE, so the CV scan, the deployed pca_fit /
+    pcr_fit model and the nested truncation all decompose the same way (sklearn's 'auto'
+    policy may pick a randomised solver on wide data)."""
     try:
         from sklearn.decomposition import PCA
-        return PCA
+        return functools.partial(PCA, svd_solver="full")
     except ImportError as e:
         raise ImportError(_SKLEARN_HINT) from e
 
@@ -362,7 +366,7 @@ def _make_folds(n, y, groups, scheme, cfg):
         folds = [(idx[groups != g], idx[groups == g]) for g in uniq]
         return (folds, f"leave-one-group-out ({len(uniq)} groups)",
                 "predict a NEW group (e.g. an unseen concentration level)")
-    sch = (scheme or cfg.cv_scheme).lower()
+    sch = _scheme(scheme, cfg)
     if sch in ("auto", "loo"):
         folds = [(idx[idx != i], np.array([i])) for i in idx]
         return (folds, "leave-one-out (per sample)",
@@ -391,7 +395,7 @@ def _fit_predict(Xtr, ytr, Xte, nc, cfg, method):
         m = _pls_cls()(n_components=nc, scale=cfg.pls_scale).fit(Xtr, ytr)
         return np.ravel(m.predict(Xte))
     if method == "pcr":
-        pca = _pca_cls()(n_components=nc, svd_solver="full").fit(Xtr)
+        pca = _pca_cls()(n_components=nc).fit(Xtr)
         reg = _linreg_cls()().fit(pca.transform(Xtr), ytr)
         return np.ravel(reg.predict(pca.transform(Xte)))
     raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
@@ -404,24 +408,28 @@ def _fit_predict_nested(Xtr, ytr, Xte, cap, cfg, method):
     PLS1 (NIPALS): the first a weights/loadings of a cap-component model ARE the a-component
     model's, and P'W is upper triangular, so the leading block of the rotation matrix
     R = W (P'W)^-1 is the a-component rotation. Hence the a-component prediction is
-    y_mean + y_std * T[:, :a] @ q[:a] with T = model.transform(Xte) and q the y-loadings
-    (sklearn scales y by its ddof=1 SD when scale=True). PCR: PCA scores are orthogonal and
-    mean-zero, so the OLS coefficients on the first a scores are the leading a coefficients of
-    the cap-score regression. Both identities are checked numerically in tests/ and, here,
-    at a = cap against the model's own predict(): on a mismatch the fold falls back to
-    from-scratch fits with a WARN, so a convention change in scikit-learn cannot pass silently."""
+    intercept + s * T[:, :a] @ q[:a] with T = model.transform(X), q the y-loadings and s the
+    y scale sklearn applied (its ddof=1 SD when scale=True, 1 otherwise). s is read off the
+    fitted model itself - the least-squares ratio of (predict - intercept) to T @ q on the
+    training rows - so no sklearn convention is hand-replicated. PCR: PCA scores are
+    orthogonal and mean-zero, so the OLS coefficients on the first a scores are the leading a
+    coefficients of the cap-score regression. Both identities are pinned column by column in
+    tests/test_nested_scan.py; the cap column is also checked here against the model's own
+    predict() and a mismatch RAISES (a silent fallback would let a convention change in
+    scikit-learn switch the algorithm behind a print)."""
     cap = int(min(cap, len(Xtr) - 1, Xtr.shape[1]))
     if method == "pls":
         m = _pls_cls()(n_components=cap, scale=cfg.pls_scale).fit(Xtr, ytr)
-        T = np.asarray(m.transform(Xte))                       # (n_te, cap), scaled-x rotations
         q = np.ravel(m.y_loadings_)                            # (cap,)
-        y_std = float(np.std(ytr, ddof=1)) if (cfg.pls_scale and len(ytr) > 1) else 1.0
-        y_std = y_std if y_std != 0 else 1.0
         y_mean = float(np.ravel(m.intercept_)[0])
-        out = y_mean + y_std * np.cumsum(T * q, axis=1)
+        t_tr = np.asarray(m.transform(Xtr)) @ q
+        p_tr = np.ravel(m.predict(Xtr)) - y_mean
+        tt = float(t_tr @ t_tr)
+        scale = float(p_tr @ t_tr) / tt if tt > 0 else 1.0
+        out = y_mean + scale * np.cumsum(np.asarray(m.transform(Xte)) * q, axis=1)
         check = np.ravel(m.predict(Xte))
     elif method == "pcr":
-        pca = _pca_cls()(n_components=cap, svd_solver="full").fit(Xtr)
+        pca = _pca_cls()(n_components=cap).fit(Xtr)
         Ttr, Tte = pca.transform(Xtr), pca.transform(Xte)
         reg = _linreg_cls()().fit(Ttr, ytr)
         b = np.ravel(reg.coef_)
@@ -431,11 +439,10 @@ def _fit_predict_nested(Xtr, ytr, Xte, cap, cfg, method):
         raise ValueError(f"unknown method: {method!r} (use 'pls' or 'pcr')")
     tol = 1e-8 * max(float(np.max(np.abs(check))), 1.0)
     if not np.allclose(out[:, -1], check, rtol=0, atol=tol):
-        print(f"  [WARN] chemometrics: nested {method} truncation disagrees with predict() at "
-              f"{cap} components (max |d| = {np.max(np.abs(out[:, -1] - check)):.2e}); "
-              f"falling back to from-scratch fits for this fold")
-        out = np.column_stack([_fit_predict(Xtr, ytr, Xte, a, cfg, method)
-                               for a in range(1, cap + 1)])
+        raise RuntimeError(
+            f"chemometrics: nested {method} truncation disagrees with predict() at {cap} "
+            f"components (max |d| = {np.max(np.abs(out[:, -1] - check)):.2e}); the truncation "
+            f"identity no longer holds for this scikit-learn - use _fit_predict per count")
     return out
 
 
@@ -443,7 +450,12 @@ def _fold_blocks(X, cfg, pre, folds):
     """Preprocess each fold ONCE: [(tr, te, Xtr_p, Xte_p)], a FRESH Preprocessor fit on the
     training rows only. Every step is a function of X alone (SNV/derivatives per row; MSC,
     centre, autoscale from the training rows), so the blocks are reusable across component
-    counts and across y-permutations."""
+    counts and across y-permutations. A pipeline of row-wise (stateless) steps only is applied
+    to X once and sliced - each row's transform does not depend on which rows share the fold."""
+    pp = Preprocessor(pre, cfg)
+    if all(step in _STATELESS for step in pp.steps):
+        Xp = pp.fit_transform(X)
+        return [(tr, te, Xp[tr], Xp[te]) for tr, te in folds]
     blocks = []
     for tr, te in folds:
         pp = Preprocessor(pre, cfg)                      # FRESH per fold
@@ -463,27 +475,33 @@ def _cv_predict(X, y, nc, cfg, pre, folds, method, blocks=None):
     return pred
 
 
-def _cv_predict_scan(X, y, cap, cfg, pre, folds, method, nested=True):
-    """Held-out predictions for EVERY component count 1..cap at once: array (n, cap).
-    nested=True (the default) fits once per fold at `cap` and truncates; nested=False refits
-    per component count (the reference the tests compare against)."""
-    blocks = _fold_blocks(X, cfg, pre, folds)
+def _cv_predict_scan(X, y, cap, cfg, pre, folds, method):
+    """Held-out predictions for EVERY component count 1..cap at once: array (n, cap), one
+    fit per fold at `cap`, truncated (see _fit_predict_nested)."""
     pred = np.full((len(y), cap), np.nan)
-    if nested:
-        for tr, te, Xtr, Xte in blocks:
-            p = _fit_predict_nested(Xtr, y[tr], Xte, cap, cfg, method)
-            pred[te, :p.shape[1]] = p
-            if p.shape[1] < cap:                          # fold too small for cap: hold the last
-                pred[te, p.shape[1]:] = p[:, -1:]
-    else:
-        for a in range(1, cap + 1):
-            pred[:, a - 1] = _cv_predict(X, y, a, cfg, pre, folds, method, blocks=blocks)
+    for tr, te, Xtr, Xte in _fold_blocks(X, cfg, pre, folds):
+        p = _fit_predict_nested(Xtr, y[tr], Xte, cap, cfg, method)
+        assert p.shape[1] == cap          # component_scan caps at min_train-1 and n_features
+        pred[te] = p
     return pred
 
 
+def _scheme(scheme, cfg):
+    return (scheme or cfg.cv_scheme).lower()
+
+
+def _cv_stats(y, pred):
+    """(resid, rmsecv, r2cv, bias) of held-out predictions; NaN-aware."""
+    resid = y - pred
+    rmsecv = float(np.sqrt(np.nanmean(resid ** 2)))
+    ss_tot = float(np.sum((y - y.mean()) ** 2))
+    r2cv = 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
+    bias = float(np.nanmean(pred - y))
+    return resid, rmsecv, r2cv, bias
+
+
 def _optimistic_loo(groups, scheme, y, cfg):
-    sch = (scheme or cfg.cv_scheme).lower()
-    return (groups is None and sch in ("auto", "loo")
+    return (groups is None and _scheme(scheme, cfg) in ("auto", "loo")
             and np.unique(y).size < y.size)
 
 
@@ -496,11 +514,7 @@ def cross_validate(X, y, n_components, cfg, pre=None, groups=None, scheme=None,
     _, X, y = _check_xy(X, y, cfg, n_components)
     folds, scheme_name, question = _make_folds(len(y), y, groups, scheme, cfg)
     pred = _cv_predict(X, y, n_components, cfg, pre, folds, method)
-    resid = y - pred
-    rmsecv = float(np.sqrt(np.nanmean(resid ** 2)))
-    ss_tot = float(np.sum((y - y.mean()) ** 2))
-    r2cv = 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
-    bias = float(np.nanmean(pred - y))
+    resid, rmsecv, r2cv, bias = _cv_stats(y, pred)
     if report:
         f = []
         if _optimistic_loo(groups, scheme, y, cfg):
@@ -518,11 +532,10 @@ def cross_validate(X, y, n_components, cfg, pre=None, groups=None, scheme=None,
 
 
 def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None,
-                   scheme=None, method="pls", _nested=True):
+                   scheme=None, method="pls"):
     """RMSECV against component count, ONE curve per preprocessing, all on the same
     folds (so the curves are comparable). Drives choose_n_components and plot_rmsecv.
-    One model per fold at the cap, truncated to every smaller count (`_nested=False` refits
-    per count - the reference path, kept for the equivalence test)."""
+    One model per fold at the cap, truncated to every smaller count (_fit_predict_nested)."""
     _, X, y = _check_xy(X, y, cfg)
     n = len(y)
     folds, scheme_name, question = _make_folds(n, y, groups, scheme, cfg)
@@ -540,8 +553,8 @@ def component_scan(X, y, cfg, max_components=None, pre_options=None, groups=None
                           "pass groups=level-labels for leave-one-level-out"))
     for pre in pre_options:
         name = Preprocessor(pre, cfg).name
-        pred = _cv_predict_scan(X, y, cap, cfg, pre, folds, method, nested=_nested)
-        rms = [float(np.sqrt(np.nanmean((y - pred[:, i]) ** 2))) for i in range(cap)]
+        pred = _cv_predict_scan(X, y, cap, cfg, pre, folds, method)
+        rms = [_cv_stats(y, pred[:, i])[1] for i in range(cap)]
         curves[name] = rms
         f.append(("INFO", f"{name:14s} RMSECV " + " ".join(f"{r:.2f}" for r in rms)))
     verify._resolve(f, cfg, f"component-scan[{scheme_name}]")
@@ -1102,24 +1115,17 @@ def permutation_test(X, y, n_components, cfg, n_perm=199, groups=None, scheme=No
     _, X, y = _check_xy(X, y, cfg, n_components)
     obs = cross_validate(X, y, n_components, cfg, pre=pre, groups=groups, scheme=scheme,
                          method=method, report=False)["r2cv"]
-    folds_fixed = groups is not None or (scheme or cfg.cv_scheme).lower() in ("auto", "loo")
+    folds_fixed = groups is not None or _scheme(scheme, cfg) in ("auto", "loo")
     if folds_fixed:
-        folds, _, _ = _make_folds(len(y), y, groups, scheme, cfg)
-        blocks = _fold_blocks(X, cfg, pre, folds)
-
-    def r2cv(yp):
-        if folds_fixed:
-            pred = _cv_predict(X, yp, n_components, cfg, pre, folds, method, blocks=blocks)
-        else:
-            f, _, _ = _make_folds(len(yp), yp, groups, scheme, cfg)
-            pred = _cv_predict(X, yp, n_components, cfg, pre, f, method)
-        resid = yp - pred
-        ss_tot = float(np.sum((yp - yp.mean()) ** 2))
-        return 1 - float(np.nansum(resid ** 2)) / ss_tot if ss_tot else float("nan")
-
+        fixed_folds, _, _ = _make_folds(len(y), y, groups, scheme, cfg)
+        fixed_blocks = _fold_blocks(X, cfg, pre, fixed_folds)
     null = np.empty(n_perm)
     for i in range(n_perm):
-        null[i] = r2cv(_permute_y(y, groups, rng))
+        yp = _permute_y(y, groups, rng)
+        folds = fixed_folds if folds_fixed else _make_folds(len(yp), yp, groups, scheme, cfg)[0]
+        blocks = fixed_blocks if folds_fixed else None
+        pred = _cv_predict(X, yp, n_components, cfg, pre, folds, method, blocks=blocks)
+        null[i] = _cv_stats(yp, pred)[2]
     p = (int(np.sum(null >= obs)) + 1) / (n_perm + 1)
     return {"observed": float(obs), "null": null, "p_value": float(p), "n_perm": n_perm,
             "caption": f"permutation test: R2(CV)={obs:.3f}, p={p:.3g} ({n_perm} permutations)"}

@@ -54,9 +54,13 @@ def test_descending_grid_matches_reversed():
 
 
 def test_pick_fails_loudly_on_misspelt_field():
+    from scripts import config
+
     class Cfg:  # a cfg object lacking the field: no silent default any more
         pass
     with pytest.raises(AttributeError):
-        pr._pick(Cfg(), "pxrd_march_r", 1.0, None)
-    assert pr._pick(None, "pxrd_march_r", 1.0, None) == 1.0
-    assert pr._pick(None, "pxrd_march_r", 1.0, 0.7) == 0.7
+        pr._pick(Cfg(), "pxrd_march_r", None)
+    with pytest.raises(AttributeError):
+        pr._pick(None, "pxrd_marchr", None)                 # misspelt: no literal to fall back on
+    assert pr._pick(None, "pxrd_march_r", None) == config.Config().pxrd_march_r   # None -> the Config default
+    assert pr._pick(None, "pxrd_march_r", 0.7) == 0.7

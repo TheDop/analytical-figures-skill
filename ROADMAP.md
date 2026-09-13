@@ -358,6 +358,25 @@ measurement, not by reading the diff):
   field accesses; every probed field was already declared in `config.py`, so a misspelt field now
   fails loudly. Functions that accept `cfg=None` resolve a default once at the top.
 
+**Simplify pass over the above (2026-09-13, four review angles: reuse / simplification / efficiency /
+altitude; every fix re-verified against the same snapshot + numeric dumps):** one `config.default_cfg`
+for every `cfg=None` entry point (the per-module literal defaults are gone); `simulate_pattern` is a
+single windowed path (`None` = `inf`), widths and window bounds vectorised; the nested PLS scan reads
+the y-scale off the fitted model and RAISES on a mismatch (no warn-and-fallback), `svd_solver="full"`
+pinned once in `_pca_cls`, the test-only `_nested` flag and the "hold the last" padding removed,
+`_cv_stats`/`_scheme` shared by scan, CV and permutations, stateless pipelines transformed once per
+scan; crystal: one `bond_pairs` (vectorised, `connected_components` for clusters), one
+`iter_hbond_candidates` + `Supercell.donor_of` traversal for the table AND the figures, `Supercell`
+carries the disorder map and is built once per render (`_prepare`), `Structure.memo` replaces five
+ad-hoc cache slots, `_all_reflections` vectorised and memoised, `_sym_code` vectorised on cached symop
+images, `plot_overlay_patterns` accepts loaded Structures so the pattern cache can hit across figures.
+Crystal snapshot: 0 geometric/H-bond/cluster/PXRD-array differences; the ONLY change is `peak_table`'s
+tie-break among symmetry-equivalent indices at one 2θ — now the first in h-major order (deterministic)
+instead of whichever float rounded lower (6 labels moved, e.g. (-2 2 -2) → (-2 -2 -2); 2θ/d/I identical).
+Left as is, with reasons: `audit_layout`'s `cfg=None` tail keeps its print loop (the default Config is
+strict and would raise where it printed); `hbonds()` keeps the `"suppressed"` key (useful API); the
+`rec()` fresh-dict contract stays (view code annotates records). Tests 134.
+
 ## Suggested sequence
 
 1. Write `references/figure_selection.md` (the decision module) — pure writing, immediate consistency win.

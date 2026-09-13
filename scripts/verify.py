@@ -38,19 +38,10 @@ class GateError(RuntimeError):
     """Raised when a FAIL gate trips under cfg.strict."""
 
 
-def _default_cfg(cfg):
-    """The gates that accept cfg=None run on the skill defaults: ONE Config, so every
-    threshold is a declared field (a misspelt one fails loudly) instead of a per-call
-    probe with its own hidden default."""
-    if cfg is None:
-        from . import config
-        cfg = config.Config()
-    return cfg
-
-
 def _resolve(findings, cfg, context=""):
-    """Print findings; raise on any FAIL if cfg.strict."""
-    cfg = _default_cfg(cfg)
+    """Print findings; raise on any FAIL if cfg.strict (cfg=None -> the skill defaults)."""
+    from . import config
+    cfg = config.default_cfg(cfg)
     worst = max((SEV[s] for s, _ in findings), default=0)
     for sev, msg in findings:
         print(f"  [{sev}] {context}{': ' if context else ''}{msg}")
@@ -199,7 +190,8 @@ def flag_outliers_mad(values, cfg=None, n_mads=None, name="metric"):
     vf = v[finite]
     n = vf.size
     if n_mads is None:
-        n_mads = _default_cfg(cfg).outlier_mad_n
+        from . import config
+        n_mads = config.default_cfg(cfg).outlier_mad_n
     med = float(np.median(vf)) if n else float("nan")
     abs_dev = np.abs(vf - med)
     mad = float(np.median(abs_dev)) if n else float("nan")
@@ -282,11 +274,7 @@ def multiplicity_check(pvals, cfg=None, alpha=0.05, method="holm", labels=None, 
             f.append(("INFO", f"{m} p-values, {method}-adjusted: {n_adj} significant at alpha={alpha}"))
     else:
         f.append(("INFO", "single p-value — no multiplicity correction needed"))
-    if cfg is not None:
-        _resolve(f, cfg, context)
-    else:
-        for s, msg in f:
-            print(f"  [{s}] {context}: {msg}")
+    _resolve(f, cfg, context)                   # only INFO/WARN here, so cfg=None prints the same
     return {"raw": p, "adjusted": adj, "reject": reject, "method": method, "alpha": alpha,
             "labels": list(labels) if labels is not None else None,
             "caption": f"{method}-adjusted p (family of {m}, alpha={alpha})"}
@@ -499,7 +487,8 @@ def audit_layout(fig, cfg=None):
     multi-panel figures - that every panel carries exactly one a/b/c letter (place
     them with style.add_panel_labels)."""
     import matplotlib.text as mtext
-    cfg = _default_cfg(cfg)
+    from . import config
+    cfg = config.default_cfg(cfg)
     f = []
     tol = cfg.tick_overlap_tol_px
     clip_tol = cfg.clip_tol_px

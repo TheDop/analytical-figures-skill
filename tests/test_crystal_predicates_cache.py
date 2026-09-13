@@ -80,20 +80,38 @@ def test_view_hbonds_are_a_subset_of_the_table_on_disorder_cifs(name):
 
 
 def test_kdtree_bond_search_equals_all_pairs():
-    """The vectorised search returns exactly the pairs the O(N^2) loop did (one CIF, whole
-    cluster; the full 9-CIF snapshot diff was run when this landed)."""
+    """The vectorised search (crystal_engine.bond_pairs) returns exactly the pairs the O(N^2)
+    is_bonded loop does, in (i, j) order (one CIF, whole cluster; the full 9-CIF snapshot diff
+    was run when this landed)."""
     s, cfg = _load("chiral_L-alanine__COD1574526.cif")
     atoms = cv.complete_molecules(s, cfg)
     alt = ce.disorder_alternatives(s)
-    fast = set(cv._bond_pairs(atoms, alt))
-    slow = set()
+    fast = cv._bond_pairs(atoms, alt)
+    slow = []
     for i in range(len(atoms)):
         for j in range(i + 1, len(atoms)):
             d = float(np.linalg.norm(atoms[i]["xyz"] - atoms[j]["xyz"]))
             if ce.is_bonded(atoms[i]["sym"], atoms[j]["sym"], d, atoms[i]["occ"], atoms[j]["occ"],
                             atoms[i]["label"], atoms[j]["label"], alt):
-                slow.add((i, j))
+                slow.append((i, j))
     assert fast == slow and len(fast) > 5
+    # one block per render: the same pairs whether the helpers get the disorder map or the block
+    blk = ce.Supercell.from_atoms(atoms, alt)
+    assert cv._bond_pairs(atoms, blk) == fast
+    assert cv._hbond_pairs(atoms, cfg, blk) == cv._hbond_pairs(atoms, cfg, alt)
+    comps = cv._component_indices(blk)
+    assert sorted(i for c in comps for i in c) == list(range(len(atoms)))
+    assert all(c == sorted(c) for c in comps) and [c[0] for c in comps] == sorted(c[0] for c in comps)
+
+
+def test_structure_memo_runs_a_factory_once_per_key():
+    s, _ = _load("chiral_L-alanine__COD1574526.cif")
+    calls = []
+    for _ in range(3):
+        s.memo(("probe", 1.0), lambda: calls.append(1) or "x")
+    s.memo(("probe", 2.0), lambda: calls.append(2) or "y")
+    assert calls == [1, 2]
+    assert ce.expand(s) is ce.expand(s) and ce.supercell(s) is ce.supercell(s)
 
 
 # ------------------------------------------------------------ PXRD cache
@@ -120,3 +138,20 @@ def test_calc_pattern_parses_the_cif_once_per_structure(monkeypatch):
                                    pxrd_crosscheck="bragg"))
     assert p3["peaks"][0] != p1["peaks"][0]
     assert len(calls) == 1
+    # an overlay fed the loaded structure reuses its cache: no further parse
+    import matplotlib
+    matplotlib.use("Agg")
+    fig, _ax, pats = cp.plot_overlay_patterns([("alanine", s)], cfg)
+    assert len(calls) == 1 and pats[0][1]["peaks"] == p1["peaks"]
+    matplotlib.pyplot.close(fig)
+
+
+def test_peak_table_ties_between_equivalent_indices_are_deterministic():
+    """Symmetry-equivalent indices sit at the same 2theta; the label must come from index order,
+    not from which of two equal angles happened to round lower (urea is tetragonal: (-2 -2 -1)
+    and (-2 -2 1) are the same reflection family)."""
+    pytest.importorskip("Dans_Diffraction")
+    s, cfg = _load("specialpos_urea__COD1008785.cif", pxrd_wavelength=1.5406, pxrd_crosscheck="bragg")
+    rows = {r["two_theta"]: r["hkl"] for r in cp.peak_table(s, cfg)}
+    assert rows[49.589] == "-2 -2 -1"
+    assert rows[35.547] == "-2 -1 0"        # (-2 -1 0) precedes (-1 2 0) in h-major order

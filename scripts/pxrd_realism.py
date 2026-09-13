@@ -97,21 +97,22 @@ def pseudo_voigt(x, center, fwhm, eta):
     eta=0 → Gaussian, eta=1 → Lorentzian. A reflection of intensity I contributes
     I·pseudo_voigt, so integrated area = I and the peak HEIGHT falls as the peak broadens
     (physically correct — the area is the structure-factor intensity)."""
-    x = np.asarray(x, float)
+    dx = np.asarray(x, float) - center
     hwhm = fwhm / 2.0
     sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
-    gauss = np.exp(-0.5 * ((x - center) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
-    lorentz = (hwhm / np.pi) / ((x - center) ** 2 + hwhm ** 2)
+    gauss = np.exp(-0.5 * (dx / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+    lorentz = (hwhm / np.pi) / (dx * dx + hwhm ** 2)
     return eta * lorentz + (1 - eta) * gauss
 
 
-def _pick(cfg, name, default, override):
-    """Keyword override > declared cfg field > module default. `cfg` is optional here (the
-    validation suite calls with cfg=None); when given it is a Config, so the field is read
-    directly — a misspelt name fails loudly instead of silently taking the default."""
+def _pick(cfg, name, override):
+    """Keyword override > declared cfg field. `cfg` is optional here (the validation suite calls
+    with cfg=None) and then resolves to the skill defaults, so the ONLY copy of each default is
+    the Config field — nothing here can drift from it; a misspelt name fails loudly."""
     if override is not None:
         return override
-    return getattr(cfg, name) if cfg is not None else default
+    from . import config
+    return getattr(config.default_cfg(cfg), name)
 
 
 def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, eta=None,
@@ -136,17 +137,17 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
     real 328-line Cu Kα1/α2 aspirin list (3000-point 5–50° grid): max deviation from the full sum
     1.8e-4 of the pattern maximum (2.6e-3 relative on peaks >5 % of max), below the ~1e-3
     quantisation of a counted lab pattern; ±10 FWHM would already cost 2 % on weak peaks."""
-    uvw = _pick(cfg, "pxrd_caglioti", (0.01, -0.005, 0.008), None)
+    uvw = _pick(cfg, "pxrd_caglioti", None)
     U = uvw[0] if U is None else U
     V = uvw[1] if V is None else V
     W = uvw[2] if W is None else W
-    eta = _pick(cfg, "pxrd_lorentz_fraction", 0.5, eta)
-    kalpha2 = _pick(cfg, "pxrd_kalpha2", False, kalpha2)
-    lam2 = _pick(cfg, "pxrd_wavelength2", None, lam2) or CU_KA2
-    ratio = _pick(cfg, "pxrd_kalpha2_ratio", CU_KA2_RATIO, ratio)
-    po_hkl = _pick(cfg, "pxrd_po_axis", None, po_hkl)
-    march_r = _pick(cfg, "pxrd_march_r", 1.0, march_r)
-    if cfg is not None and lam1 == CU_KA1 and cfg.pxrd_wavelength:
+    eta = _pick(cfg, "pxrd_lorentz_fraction", eta)
+    kalpha2 = _pick(cfg, "pxrd_kalpha2", kalpha2)
+    lam2 = _pick(cfg, "pxrd_wavelength2", lam2) or CU_KA2
+    ratio = _pick(cfg, "pxrd_kalpha2_ratio", ratio)
+    po_hkl = _pick(cfg, "pxrd_po_axis", po_hkl)
+    march_r = _pick(cfg, "pxrd_march_r", march_r)
+    if lam1 == CU_KA1 and _pick(cfg, "pxrd_wavelength", None):
         lam1 = float(cfg.pxrd_wavelength)           # the α1 the reflection list was computed at
     if kalpha2 and abs(lam1 - CU_KA1) > 1e-3 and lam2 == CU_KA2:
         print(f"  [WARN] pxrd_realism: Kα2 doublet uses the Cu Kα2 line ({CU_KA2} Å) on an α1 of {lam1} Å - "
@@ -163,19 +164,20 @@ def simulate_pattern(reflections, x_grid, cfg=None, *, U=None, V=None, W=None, e
 
     x = np.asarray(x_grid, float)
     y = np.zeros_like(x)
-    if window_fwhm is None or x.size == 0:
-        for tth, I, _hkl in refl:
-            y = y + I * pseudo_voigt(x, tth, float(caglioti_fwhm(tth, U, V, W)), eta)
-    else:
-        order = np.argsort(x, kind="stable")      # searchsorted needs an ascending grid
-        xs = x[order]
-        ys = np.zeros_like(xs)
-        for tth, I, _hkl in refl:
-            fw = float(caglioti_fwhm(tth, U, V, W))
-            i0, i1 = np.searchsorted(xs, (tth - window_fwhm * fw, tth + window_fwhm * fw))
-            if i1 > i0:
-                ys[i0:i1] += I * pseudo_voigt(xs[i0:i1], tth, fw, eta)
-        y[order] = ys
+    if not refl or x.size == 0:
+        return y
+    w = np.inf if window_fwhm is None else float(window_fwhm)   # inf => slice (0, n) = the full sum
+    order = np.argsort(x, kind="stable")          # searchsorted needs an ascending grid
+    xs = x[order]
+    ys = np.zeros_like(xs)
+    tts = np.array([r[0] for r in refl], float)
+    fws = caglioti_fwhm(tts, U, V, W)             # one vectorised call, not one per reflection
+    i0s = np.searchsorted(xs, tts - w * fws)      # fw > 0 always (clamped), so inf*fw is never nan
+    i1s = np.searchsorted(xs, tts + w * fws)
+    for (tth, I, _hkl), fw, i0, i1 in zip(refl, fws, i0s, i1s):
+        if i1 > i0:
+            ys[i0:i1] += I * pseudo_voigt(xs[i0:i1], tth, float(fw), eta)
+    y[order] = ys
     if normalize and y.max() > 0:
         y = y / y.max() * 100.0
     return y

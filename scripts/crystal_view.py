@@ -10,15 +10,16 @@ gates); custom / vector / axis angles are first-class because they're equally re
     orient(struct, cfg, atoms)        -> (R, (elev,azim,roll), findings)  the deterministic camera
     render(struct, cfg)               -> (fig, ax)   element-coloured, bonds + dashed H-bonds + labels
 
-Every bond and H-bond drawn here comes from crystal_engine.is_bonded / is_hbond (the same
-predicates that build the validation table, disorder exclusions included) over the engine's
-cached supercell + KD-trees; nothing is re-derived in this module.
+Every bond and H-bond drawn here comes from crystal_engine.is_bonded / bond_pairs and
+iter_hbond_candidates / hbond_geometry (the same predicates and traversal that build the
+validation table, disorder exclusions included), applied through ONE crystal_engine.Supercell
+per rendered cluster; nothing is re-derived in this module.
 """
 from __future__ import annotations
 import math
 import numpy as np
 from . import crystal_engine, style, verify
-from .crystal_engine import is_bonded, is_hbond, hbond_sets, bond_search_radius
+from .crystal_engine import Supercell, is_bonded, iter_hbond_candidates, hbond_sets
 
 # CPK / element colours (recognizable); labels carry identity so colour is redundant.
 CPK = {"H": "#D0D0D0", "C": "#404040", "N": "#3050F8", "O": "#FF2010", "S": "#E0C020",
@@ -51,7 +52,6 @@ def complete_molecules(struct, cfg):
     across a 3x3x3 neighbourhood (so an inversion-centre half-molecule is completed, and a
     boundary-straddling molecule is made whole) — PCA must orient a real molecule, not an
     AU fragment. Bonds by crystal_engine.is_bonded (disorder-aware) over the cached supercell."""
-    alt = crystal_engine.disorder_alternatives(struct)
     sup = crystal_engine.supercell(struct)
 
     def k(p):
@@ -68,7 +68,7 @@ def complete_molecules(struct, cfg):
     while frontier:
         nxt = []
         for a in frontier:
-            for j in sup.bonded_to(a, alt):
+            for j, _d in sup.bonded_to(a):
                 kk = k(sup.xyz[j])
                 if kk in have:
                     continue
@@ -80,64 +80,44 @@ def complete_molecules(struct, cfg):
     return chosen
 
 
+# ------------------------------------------------------- the rendered cluster as a block
+def _cluster(atoms, alt=None):
+    """The rendered cluster as ONE crystal_engine.Supercell (KD-trees, disorder map). `alt` is
+    the disorder-alternative map — or an already-built Supercell of these atoms, which the
+    renderers pass so every search in one render shares a single block."""
+    return alt if isinstance(alt, Supercell) else Supercell.from_atoms(atoms, alt)
+
+
 def _hide_ch(atoms, alt=None):
     """Drop hydrogens whose nearest heavy atom is a bonded carbon (view_hide_ch)."""
-    from scipy.spatial import cKDTree
-    heavy = [a for a in atoms if a["sym"] != "H"]
-    if not heavy:
-        return list(atoms)
-    tree = cKDTree(np.array([a["xyz"] for a in heavy], float))
+    blk = _cluster(atoms, alt)
     out = []
     for a in atoms:
         if a["sym"] == "H":
-            D = heavy[int(tree.query(a["xyz"])[1])]
-            d = float(np.linalg.norm(D["xyz"] - a["xyz"]))
-            if D["sym"] == "C" and is_bonded("C", "H", d, D["occ"], a["occ"], D["label"], a["label"], alt):
+            k = blk.nearest_heavy(a["xyz"])
+            if k is not None and blk.sym[k] == "C" and is_bonded(
+                    "C", "H", float(np.linalg.norm(blk.xyz[k] - a["xyz"])), blk.occ[k], a["occ"],
+                    blk.label[k], a["label"], blk.alt):
                 continue
         out.append(a)
     return out
 
 
 def _bond_pairs(atoms, alt=None):
-    """(i, j) covalent bonds within the rendered cluster, by crystal_engine.is_bonded."""
-    from scipy.spatial import cKDTree
-    if len(atoms) < 2:
-        return []
-    xyz = np.array([a["xyz"] for a in atoms], float)
-    out = []
-    for i, j in sorted(cKDTree(xyz).query_pairs(r=bond_search_radius(a["sym"] for a in atoms))):
-        d = float(np.linalg.norm(xyz[i] - xyz[j]))
-        if is_bonded(atoms[i]["sym"], atoms[j]["sym"], d, atoms[i]["occ"], atoms[j]["occ"],
-                     atoms[i]["label"], atoms[j]["label"], alt):
-            out.append((i, j))
-    return out
+    """(i, j) covalent bonds within the rendered cluster, by crystal_engine.bond_pairs."""
+    return [(i, j) for i, j, _d in _cluster(atoms, alt).bond_pairs()]
 
 
 def _hbond_records(atoms, cfg, alt=None):
-    """(h_idx, donor_idx, acceptor_idx) for every D-H...A within the rendered cluster, by
-    crystal_engine.is_hbond — the table's criteria, disorder exclusion included (pass `alt`),
-    so the figure can't assert a bond the table wouldn't. Computed ONCE per render and handed
-    to orient / the dashed lines / the label set."""
-    from scipy.spatial import cKDTree
-    donors, acc = hbond_sets(cfg)
-    heavy_idx = [i for i, a in enumerate(atoms) if a["sym"] != "H"]
-    if not heavy_idx:
-        return []
-    xyz = np.array([a["xyz"] for a in atoms], float)
-    htree, tree = cKDTree(xyz[heavy_idx]), cKDTree(xyz)
-    out = []
-    for hi, h in enumerate(atoms):
-        if h["sym"] != "H":
-            continue
-        di = heavy_idx[int(htree.query(h["xyz"])[1])]
-        D = atoms[di]
-        if D["sym"] not in donors or \
-                float(np.linalg.norm(D["xyz"] - h["xyz"])) > crystal_engine._covsum(D["sym"], "H") + crystal_engine.BOND_TOL:
-            continue
-        for ai in sorted(tree.query_ball_point(D["xyz"], 4.0)):
-            if atoms[ai]["sym"] in acc and is_hbond(D, h, atoms[ai], cfg, alt, donors, acc):
-                out.append((hi, di, ai))
-    return out
+    """(h_idx, donor_idx, acceptor_idx) for every asserted D-H...A within the rendered cluster,
+    by crystal_engine.iter_hbond_candidates — the table's traversal and criteria, disorder
+    exclusion included, so the figure can't assert a bond the table wouldn't. The renderers
+    compute this ONCE and derive the dashed lines, the roll and the label set from it."""
+    blk = _cluster(atoms, alt)
+    idx = {id(a): i for i, a in enumerate(atoms)}
+    return [(idx[id(h)], k, j) for h, k, j, geo in
+            iter_hbond_candidates(blk, (a for a in atoms if a["sym"] == "H"), cfg)
+            if geo["kind"] == "hbond"]
 
 
 def _hbond_pairs(atoms, cfg, alt=None):
@@ -145,12 +125,7 @@ def _hbond_pairs(atoms, cfg, alt=None):
     return [(hi, ai) for hi, _di, ai in _hbond_records(atoms, cfg, alt)]
 
 
-def _hbond_label_set(atoms, cfg, alt=None, records=None):
-    """Atom indices to label under view_label_atoms='hbond': the DONOR heavy atom and the ACCEPTOR
-    of each H-bond — i.e. only the atoms that make the synthon (the bridging H stays unlabelled).
-    Empty set if the rendered cluster has no H-bonds."""
-    if records is None:
-        records = _hbond_records(atoms, cfg, alt)
+def _label_set(records):
     return {i for _hi, di, ai in records for i in (di, ai)}
 
 
@@ -204,11 +179,7 @@ def orient(struct, cfg, atoms, hbonds=None):
     # roll: align the mean in-plane D->A H-bond vector horizontal (else long axis horizontal)
     theta = 0.0
     if cfg.view_roll_objective == "hbond":
-        if hbonds is None:
-            alt = (crystal_engine.disorder_alternatives(struct)
-                   if isinstance(struct, crystal_engine.Structure) else None)
-            hbonds = _hbond_pairs(atoms, cfg, alt)
-        hb = hbonds
+        hb = hbonds if hbonds is not None else _hbond_pairs(atoms, cfg)
         vecs = [atoms[a]["xyz"] - atoms[d]["xyz"] for d, a in hb]
         if vecs:
             inplane = np.array([[v @ x, v @ y] for v in vecs])
@@ -257,17 +228,10 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
     """Zero-dependency FALLBACK renderer (matplotlib 3D). matplotlib has no depth buffer,
     so atom/bond occlusion at vertices is imperfect (small white wedges) — prefer the
     pyvista backend for publication output. Returns (fig, ax)."""
-    alt = crystal_engine.disorder_alternatives(struct)
-    if atoms is None:
-        atoms = complete_molecules(struct, cfg)
-    if cfg.view_hide_ch:
-        atoms = _hide_ch(atoms, alt)
-    if len(atoms) < 2:
-        raise ValueError("crystal_view.render: fewer than 2 atoms after completion")
-    hbonds = _hbond_pairs(atoms, cfg, alt)                # once per render
+    atoms, blk, hbonds, hbset = _prepare(struct, cfg, atoms)
     R, view, findings = orient(struct, cfg, atoms, hbonds)
     verify._resolve(findings, cfg, "orientation")
-    desat = _desat_mask(atoms, alt) if cfg.color_by_component else {}
+    desat = _desat_mask(atoms, blk) if cfg.color_by_component else {}
 
     P = np.array([a["xyz"] for a in atoms])
     Pc = P - P.mean(0)
@@ -275,8 +239,7 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
 
     style.apply_style(cfg)
     fig, ax = style.figure(cfg, subplot_kw={"projection": "3d"})
-    bonds = _bond_pairs(atoms, alt)
-    for i, j in bonds:
+    for i, j in _bond_pairs(atoms, blk):
         ci = _desat(_rgb(_bond_color(atoms[i]["sym"]))) if desat.get(id(atoms[i])) else _bond_color(atoms[i]["sym"])
         cj = _desat(_rgb(_bond_color(atoms[j]["sym"]))) if desat.get(id(atoms[j])) else _bond_color(atoms[j]["sym"])
         full = np.array([Pr[i], Pr[j]])
@@ -297,7 +260,6 @@ def _render_matplotlib(struct, cfg, atoms=None, cell_box=False):
         ax.scatter(p[0], p[1], p[2], s=_size(a["sym"]), color=col,
                    edgecolors="k", linewidths=0.3, depthshade=True, zorder=3)
     if cfg.view_label_atoms != "none":
-        hbset = _hbond_label_set(atoms, cfg, alt) if cfg.view_label_atoms == "hbond" else None
         labelled = set()
         for i, (a, p) in enumerate(zip(atoms, Pr)):
             sup = a.get("sup")
@@ -426,16 +388,29 @@ def _desat_mask(atoms, alt):
     """{id(atom): True} for atoms NOT in the largest molecule — so color_by_component keeps the
     largest component (the 'main' molecule) in full element colour and mutes the rest (the
     coformer/solvent). Empty (no muting) when there's a single component."""
-    comps = _components(atoms, alt)
+    comps = _component_indices(_cluster(atoms, alt))
     if len(comps) < 2:
         return {}
     mx = max(len(c) for c in comps)
-    mask = {}
-    for c in comps:
-        muted = len(c) < mx
-        for a in c:
-            mask[id(a)] = muted
-    return mask
+    return {id(atoms[i]): len(c) < mx for c in comps for i in c}
+
+
+def _prepare(struct, cfg, atoms):
+    """The shared front half of both renderers: the cluster (default: the completed molecules),
+    C-H hiding, ONE Supercell over it, and from that block — once — the dashed H-bond pairs
+    and the synthon label set. Returns (atoms, blk, hbonds, hbset)."""
+    alt = crystal_engine.disorder_alternatives(struct)
+    if atoms is None:
+        atoms = complete_molecules(struct, cfg)
+    if cfg.view_hide_ch:
+        atoms = _hide_ch(atoms, alt)
+    if len(atoms) < 2:
+        raise ValueError("crystal_view.render: fewer than 2 atoms after completion")
+    blk = Supercell.from_atoms(atoms, alt)
+    records = _hbond_records(atoms, cfg, blk)
+    hbonds = [(hi, ai) for hi, _di, ai in records]
+    hbset = _label_set(records) if cfg.view_label_atoms == "hbond" else None
+    return atoms, blk, hbonds, hbset
 
 
 def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
@@ -444,14 +419,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
     from the orientation engine. `atoms` overrides the default complete-molecule set; `cell_box`
     draws the unit-cell edges + a/b/c. Returns an RGB ndarray with halo labels composited."""
     import pyvista as pv
-    alt = crystal_engine.disorder_alternatives(struct)
-    if atoms is None:
-        atoms = complete_molecules(struct, cfg)
-    if cfg.view_hide_ch:
-        atoms = _hide_ch(atoms, alt)
-    if len(atoms) < 2:
-        raise ValueError("crystal_view: fewer than 2 atoms after completion")
-    hbonds = _hbond_pairs(atoms, cfg, alt)                # once per render
+    atoms, blk, hbonds, hbset = _prepare(struct, cfg, atoms)
     R, _, findings = orient(struct, cfg, atoms, hbonds)
     P = np.array([a["xyz"] for a in atoms])
     ctr = P.mean(0)
@@ -468,7 +436,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
                                  "pyvista used a PCA camera (use view_orientation='vector' "
                                  "for an explicit pyvista view)"))
     verify._resolve(findings, cfg, "orientation")
-    desat = _desat_mask(atoms, alt) if cfg.color_by_component else {}
+    desat = _desat_mask(atoms, blk) if cfg.color_by_component else {}
 
     res = int(cfg.view_resolution)
     pl = pv.Plotter(off_screen=True, window_size=[res, res], lighting="light kit")
@@ -510,7 +478,7 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
                 continue                                          # else fall through to a sphere
         pl.add_mesh(pv.Sphere(radius=crad(a["sym"]), center=p, theta_resolution=48,
                               phi_resolution=48), color=col, **sph)
-    for i, j in _bond_pairs(atoms, alt):
+    for i, j in _bond_pairs(atoms, blk):
         a_, b_ = P[i], P[j]; d = b_ - a_; L = float(np.linalg.norm(d)); mid = (a_ + b_) / 2
         ri, rj = _rgb(_bond_color(atoms[i]["sym"])), _rgb(_bond_color(atoms[j]["sym"]))
         if desat.get(id(atoms[i])):
@@ -536,7 +504,6 @@ def _render_pyvista(struct, cfg, atoms=None, cell_box=False):
     # the render (below) so they sit at the atom without a box hiding the molecule.
     sel, seen = [], set()
     if cfg.view_label_atoms != "none":
-        hbset = _hbond_label_set(atoms, cfg, alt) if cfg.view_label_atoms == "hbond" else None
         for i, (a, p) in enumerate(zip(atoms, P)):
             sup = a.get("sup")
             dk = (a["label"], sup)
@@ -602,27 +569,27 @@ def save(rendered, basename, cfg):
 
 
 # ------------------------------------------------------------------- packing (Phase 2)
-def _components(atoms, alt=None):
-    """Connected components (whole molecules) of `atoms` by covalent bonds (crystal_engine.is_bonded,
-    disorder-aware)."""
-    n = len(atoms)
+def _component_indices(blk):
+    """Connected components (whole molecules) of a block by its covalent bonds (crystal_engine
+    .bond_pairs, disorder-aware): lists of block indices, each ascending, ordered by first atom."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    n = len(blk.xyz)
     if n == 0:
         return []
-    parent = list(range(n))
+    pairs = blk.bond_pairs()
+    i = np.array([p[0] for p in pairs], int)
+    j = np.array([p[1] for p in pairs], int)
+    adj = coo_matrix((np.ones(len(i), bool), (i, j)), shape=(n, n))
+    _, lab = connected_components(adj, directed=False)
+    order = np.argsort(lab, kind="stable")
+    bounds = np.flatnonzero(np.diff(lab[order])) + 1
+    return [c.tolist() for c in np.split(order, bounds)]
 
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]; x = parent[x]
-        return x
 
-    for i, j in _bond_pairs(atoms, alt):
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
-    comps = {}
-    for idx in range(n):
-        comps.setdefault(find(idx), []).append(atoms[idx])
-    return list(comps.values())
+def _components(atoms, alt=None):
+    """Connected components (whole molecules) of `atoms`, as lists of atom dicts."""
+    return [[atoms[i] for i in c] for c in _component_indices(_cluster(atoms, alt))]
 
 
 def _pack_atoms(struct, cfg, cells=None):
@@ -631,15 +598,13 @@ def _pack_atoms(struct, cfg, cells=None):
     duplicate. Built over a -1..N+1 supercell, grouped into molecules, then centroid-filtered."""
     nx, ny, nz = cells or cfg.pack_cells
     if cfg.cell_fill == "clip":   # literal cell contents, molecules cut at the outer box
-        blk = crystal_engine.supercell(struct, (0, 0, 0), (nx - 1, ny - 1, nz - 1))
-        return [blk.rec(i) for i in range(len(blk.xyz))]
+        return crystal_engine.supercell(struct, (0, 0, 0), (nx - 1, ny - 1, nz - 1)).records()
     blk = crystal_engine.supercell(struct, (-1, -1, -1), (nx, ny, nz))
-    sup = [blk.rec(i) for i in range(len(blk.xyz))]
     out = []
-    for comp in _components(sup, crystal_engine.disorder_alternatives(struct)):
-        cen = np.mean([a["frac"] for a in comp], axis=0)
+    for comp in _component_indices(blk):
+        cen = blk.frac[comp].mean(axis=0)
         if (-1e-4 <= cen[0] < nx) and (-1e-4 <= cen[1] < ny) and (-1e-4 <= cen[2] < nz):
-            out.extend(comp)
+            out.extend(blk.rec(i) for i in comp)
     return out
 
 
@@ -686,12 +651,10 @@ def _hbond_env_atoms(struct, cfg, central=None):
     annotated with their 'n_pqr' code + a roman superscript, and the caption key is logged.
     `central` defaults to the whole asymmetric unit; pass a subset (e.g. one molecule) to CROP the
     figure to just that molecule's H-bond environment (useful for Z'>1 structures)."""
-    from scipy.spatial import cKDTree
     if central is None:
         central = complete_molecules(struct, cfg)
     for a in central:
         a["neighbour"] = False
-    alt = crystal_engine.disorder_alternatives(struct)
     donors, acc = hbond_sets(cfg)
     sup = crystal_engine.supercell(struct)
 
@@ -699,36 +662,25 @@ def _hbond_env_atoms(struct, cfg, central=None):
         return (int(round(p[0] * 50)), int(round(p[1] * 50)), int(round(p[2] * 50)))
 
     central_keys = {key(a["xyz"]) for a in central}
+    cacc_keys = {key(a["xyz"]) for a in central if a["sym"] in acc}
 
+    # Both directions run the engine's traversal over the 3x3x3 block: central hydrogens seed
+    # OUTSIDE acceptors; the hydrogens of every donor atom within the 4.0 A D...A ceiling of a
+    # central acceptor seed their OUTSIDE donor. (A central molecule's own atoms are excluded by
+    # position key, so intramolecular contacts never become neighbours.)
     seeds = []
-    cheavy = [a for a in central if a["sym"] != "H"]
-    if cheavy:                                                     # central donor -> outside acceptor
-        ctree = cKDTree(np.array([a["xyz"] for a in cheavy], float))
-        for h in (a for a in central if a["sym"] == "H"):
-            D = cheavy[int(ctree.query(h["xyz"])[1])]
-            for j in sup.neighbours(D["xyz"], 4.0):                # D...A ceiling of hbond_geometry
-                if sup.sym[j] in acc and key(sup.xyz[j]) not in central_keys:
-                    A = sup.rec(j)
-                    if is_hbond(D, h, A, cfg, alt, donors, acc):
-                        seeds.append(A)
-    cacc = [a for a in central if a["sym"] in acc]
-    if cacc and sup.tree is not None:                              # outside donor -> central acceptor
-        # candidate hydrogens: within the H...A vdW ceiling of some central acceptor (+0.5 A
-        # slack for the X-H normalization shift); is_hbond then decides exactly
-        reach = crystal_engine._vdw("H") + max(crystal_engine._vdw(a["sym"]) for a in cacc) + 0.5
-        cand = set()
-        for a in cacc:
-            cand.update(sup.tree.query_ball_point(a["xyz"], reach))
-        for j in sorted(cand):
-            if sup.sym[j] != "H" or key(sup.xyz[j]) in central_keys:
-                continue
-            h = sup.rec(j)
-            k = sup.nearest_heavy(h["xyz"])
-            if k is None:
-                break
-            D = sup.rec(k)
-            if any(is_hbond(D, h, A, cfg, alt, donors, acc) for A in cacc):
-                seeds.append(D)
+    for h, k, j, geo in iter_hbond_candidates(sup, (a for a in central if a["sym"] == "H"), cfg):
+        if geo["kind"] == "hbond" and key(sup.xyz[j]) not in central_keys:
+            seeds.append(sup.rec(j))
+    cand = set()
+    for a in central:
+        if a["sym"] in acc:
+            for k in sup.neighbours(a["xyz"], 4.0):
+                if sup.sym[k] in donors and key(sup.xyz[k]) not in central_keys:
+                    cand.update(j for j, _d in sup.bonded_to(sup.atom(k)) if sup.sym[j] == "H")
+    for h, k, j, geo in iter_hbond_candidates(sup, (sup.atom(i) for i in sorted(cand)), cfg):
+        if geo["kind"] == "hbond" and key(sup.xyz[j]) in cacc_keys:
+            seeds.append(sup.rec(k))
 
     # ---- assemble neighbour atoms at the requested extent
     mode = cfg.hbond_neighbour
@@ -748,7 +700,7 @@ def _hbond_env_atoms(struct, cfg, central=None):
             for a in frontier:
                 if mode == "stub" and depth[id(a)] >= 1:
                     continue
-                for j in sup.bonded_to(a, alt):
+                for j, _d in sup.bonded_to(a):
                     kk = key(sup.xyz[j])
                     if kk in have:
                         continue

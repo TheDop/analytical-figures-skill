@@ -16,7 +16,7 @@ otherwise pay the ~0.3 s matplotlib import for numbers that never reach a figure
 """
 from __future__ import annotations
 import os
-from .config import SKILL_VERSION   # dropped when bundled; then resolves to the inlined global
+from .config import SKILL_VERSION, default_cfg   # dropped when bundled; then resolve to the inlined globals
 
 
 def _plt():
@@ -195,8 +195,9 @@ def check_figure_width(fig, cfg=None, journal=None, column=None, tol_mm=0.5):
     submission-ready and won't be silently rescaled (rescaling shrinks the pt fonts). Returns
     (ok, message); journals quote widths in mm so the message is in mm. journal/column default
     from cfg. (ACS Anal. Chem. single 3.33 in / double 7.0 in; Nature 89 / 183 mm.)"""
-    journal = journal or (cfg.journal if cfg is not None else "general")
-    column = column or (cfg.column if cfg is not None else "single")
+    cfg = default_cfg(cfg)
+    journal = journal or cfg.journal
+    column = column or cfg.column
     spec = _WIDTHS.get(journal, _WIDTHS["general"])
     want_in = spec.get(column, spec["single"])
     got_in = float(fig.get_size_inches()[0])
@@ -366,7 +367,7 @@ def add_panel_labels(fig, cfg=None, axes=None, labels=None, style=None,
         x_offset_pt = _auto_x_offset(fig, axs)
     if labels is None:
         if style is None:
-            style = cfg.journal if cfg is not None else "general"
+            style = default_cfg(cfg).journal
         fmt = _PANEL_FMT.get(style, _PANEL_FMT["general"])
         labels = [fmt(s) for s in _letter_sequence(len(axs))]
     elif len(labels) < len(axs):

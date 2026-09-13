@@ -1,16 +1,10 @@
 """style imports pyplot on first use, so the numbers-only paths (module import, the CLI's
 CSV calibrate) never pay the matplotlib import; and the figure path still works."""
-import os
-import subprocess
-import sys
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from conftest import run_py
 
 
 def _run(code):
-    r = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    return r.stdout
+    return run_py(code=code).stdout
 
 
 def test_module_import_leaves_pyplot_out():

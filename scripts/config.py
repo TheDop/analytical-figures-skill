@@ -188,3 +188,10 @@ class Config:
     cell_fill: str = "molecule"          # unit-cell / packing: "molecule" (whole, by centroid) | "clip" (cell contents cut at the box)
     hbond_neighbour: str = "stub"        # render_hbond_environment neighbour extent: "whole" (full molecule) | "stub" (contact atom + 1 bonded shell) | "site" (contact atom only)
     color_by_component: bool = False      # cocrystal figures: keep the largest molecule in full element colour, desaturate the others (distinguish API vs coformer)
+
+
+def default_cfg(cfg):
+    """Resolve an optional cfg: None -> ONE Config() of the skill defaults, so every threshold a
+    `cfg=None` entry point uses is a declared field (a misspelt one fails loudly) instead of a
+    per-call literal that can drift from Config. The one mechanism for every module."""
+    return Config() if cfg is None else cfg

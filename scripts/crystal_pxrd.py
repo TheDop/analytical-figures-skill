@@ -8,10 +8,12 @@ setup_scatter), and peak_width is in Q (A^-1), NOT degrees. Cross-checked agains
 (or a Bragg-law fallback). Validated in skill_validation/dans_fix.py (ELAINM: 47 peaks,
 Dans vs pymatgen top peak 0.011 deg).
 
-The Dans crystal, its powder computation (structure factors) and the pymatgen cross-check are
-cached ON THE STRUCTURE, keyed by every parameter that changes the result (CIF path, wavelength,
-2theta window, peak width, Lorentz fraction), so calc_pattern / reflection_list / peak_table /
-realistic_pattern / plot_overlay_patterns parse and compute each once per (struct, settings).
+The Dans crystal, its powder computation (structure factors), the pymatgen cross-check and the
+cell-metric reflection list are memoised ON THE STRUCTURE (`Structure.memo`), keyed by every
+parameter that changes the result (wavelength, 2theta window, peak width, Lorentz fraction; the
+CIF is the one the structure was loaded from), so calc_pattern / reflection_list / peak_table /
+realistic_pattern parse and compute each once per (struct, settings). plot_overlay_patterns
+accepts loaded Structures for the same reason.
 
     calc_pattern(struct, cfg)             -> {two_theta, intensity, wavelength, peaks}
     reflection_list(struct, cfg)          -> [(2theta, I, (h,k,l)), ...] real structure factors
@@ -43,23 +45,23 @@ def _dans():
     return dif
 
 
-def _dans_crystal(struct, cfg):
-    """dif.Crystal(cfg.cif_path), parsed once per structure (cached on struct, keyed by path)."""
-    key = ("dans", cfg.cif_path)
-    if key not in struct._pxrd:
-        struct._pxrd[key] = _dans().Crystal(cfg.cif_path)
-    return struct._pxrd[key]
+def _window(cfg):
+    return float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max)
+
+
+def _dans_crystal(struct):
+    """dif.Crystal of the structure's own CIF, parsed once per structure."""
+    return struct.memo(("dans",), lambda: _dans().Crystal(struct.path))
 
 
 def _powder(struct, cfg):
     """Dans powder computation at the cfg settings — (two_theta, raw intensity, reflection
-    array), each computed ONCE per (CIF, wavelength, window, peak width, Lorentz fraction) and
-    cached on struct. Returns copies, so callers may normalise in place."""
-    wl, src = _wavelength(struct, cfg)
-    key = ("powder", cfg.cif_path, wl, float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max),
-           float(cfg.pxrd_peak_width), float(cfg.pxrd_lorentz_fraction))
-    if key not in struct._pxrd:
-        xtl = _dans_crystal(struct, cfg)
+    array), computed ONCE per (wavelength, window, peak width, Lorentz fraction) and memoised on
+    struct. Returns copies of the profile arrays, so callers may normalise in place."""
+    wl, _src = _wavelength(struct, cfg)
+
+    def compute():
+        xtl = _dans_crystal(struct)
         xtl.Scatter.setup_scatter(scattering_type="xray", wavelength_a=wl,
                                   powder_units="twotheta",
                                   min_twotheta=cfg.pxrd_two_theta_min,
@@ -69,28 +71,25 @@ def _powder(struct, cfg):
         tt, inten, refl = xtl.Scatter.powder("xray", units="tth",
                                              peak_width=cfg.pxrd_peak_width,
                                              lorentz_fraction=cfg.pxrd_lorentz_fraction)
-        struct._pxrd[key] = (np.asarray(tt, float), np.asarray(inten, float), np.asarray(refl, float))
-    tt, inten, refl = struct._pxrd[key]
-    return tt.copy(), inten.copy(), refl, wl, src
+        return np.asarray(tt, float), np.asarray(inten, float), np.asarray(refl, float)
+    tt, inten, refl = struct.memo(("powder", wl, *_window(cfg), float(cfg.pxrd_peak_width),
+                                   float(cfg.pxrd_lorentz_fraction)), compute)
+    return tt.copy(), inten.copy(), refl
 
 
 def _pymatgen_top(struct, cfg, wl):
-    """2theta of pymatgen's strongest reflection, once per (CIF, wavelength, window); None when
+    """2theta of pymatgen's strongest reflection, once per (wavelength, window); None when
     pymatgen is absent or fails (the caller falls back to the Bragg-law check)."""
-    key = ("pmg", cfg.cif_path, wl, float(cfg.pxrd_two_theta_min), float(cfg.pxrd_two_theta_max))
-    if key not in struct._pxrd:
-        other = None
+    def compute():
         try:
             from pymatgen.core import Structure as PMG
             from pymatgen.analysis.diffraction.xrd import XRDCalculator
-            st = PMG.from_file(cfg.cif_path)
             pat = XRDCalculator(wavelength=wl).get_pattern(
-                st, two_theta_range=(cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max))
-            other = float(pat.x[int(np.argmax(pat.y))])
+                PMG.from_file(struct.path), two_theta_range=_window(cfg))
+            return float(pat.x[int(np.argmax(pat.y))])
         except Exception:
-            pass
-        struct._pxrd[key] = other
-    return struct._pxrd[key]
+            return None
+    return struct.memo(("pmg", wl, *_window(cfg)), compute)
 
 
 def _find_peaks(tt, inten, height=2.0, distance=5):
@@ -140,7 +139,8 @@ def _bragg_nearest(struct, wl, tth, hmax=5):
 def calc_pattern(struct, cfg):
     """Dans_Diffraction powder pattern, (000) off-grid, at the declared wavelength.
     Gates the calc/cross-check agreement per cfg.pxrd_crosscheck."""
-    tt, inten, _, wl, src = _powder(struct, cfg)
+    wl, src = _wavelength(struct, cfg)
+    tt, inten, _refl = _powder(struct, cfg)
     if inten.size and inten.max() > 0:
         inten = inten / inten.max() * 100.0
     peaks = _find_peaks(tt, inten)
@@ -177,13 +177,9 @@ def reflection_list(struct, cfg):
     already applied (Dans's `powder()` 3rd return: columns h,k,l,2theta,intensity, grouped by
     min_overlap). This is the correct input to `pxrd_realism.simulate_pattern` (feed it THESE, not
     the post-broadened peak list — that would double-broaden). Filtered to the cfg 2theta window."""
-    _, _, refl, _wl, _src = _powder(struct, cfg)
-    lo, hi = cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max
-    out = []
-    for h, k, l, tth, I in refl:
-        if lo <= tth <= hi and I > 0:
-            out.append((float(tth), float(I), (int(round(h)), int(round(k)), int(round(l)))))
-    return out
+    lo, hi = _window(cfg)
+    return [(float(tth), float(I), (int(round(h)), int(round(k)), int(round(l))))
+            for h, k, l, tth, I in _powder(struct, cfg)[2] if lo <= tth <= hi and I > 0]
 
 
 def realistic_pattern(struct, cfg, x_grid=None, npoints=3000):
@@ -250,24 +246,17 @@ def _all_reflections(struct, wl, tth_min, tth_max, hmax=None):
     d_min = wl / (2.0 * math.sin(math.radians(min(tth_max, 179.0) / 2.0)))
     hb, kb, lb = ((hmax,) * 3 if hmax is not None
                   else tuple(int(ax / d_min) + 1 for ax in (a, b, c)))
-    out = []
-    for h in range(-hb, hb + 1):
-        for k in range(-kb, kb + 1):
-            for l in range(-lb, lb + 1):
-                if (h, k, l) == (0, 0, 0):
-                    continue
-                hkl = np.array([h, k, l], float)
-                inv_d2 = float(hkl @ Gs @ hkl)
-                if inv_d2 <= 0:
-                    continue
-                d = 1.0 / math.sqrt(inv_d2)
-                s = wl / (2 * d)
-                if s >= 1.0:
-                    continue
-                t2 = 2 * math.degrees(math.asin(s))
-                if tth_min <= t2 <= tth_max:
-                    out.append((t2, (h, k, l), d))
-    return out
+    H = np.mgrid[-hb:hb + 1, -kb:kb + 1, -lb:lb + 1].reshape(3, -1).T.astype(float)   # h-major, like nested loops
+    inv_d2 = np.einsum("ni,ij,nj->n", H, Gs, H)
+    ok = (inv_d2 > 0) & np.any(H != 0, axis=1)
+    d = np.full(len(H), np.inf)
+    d[ok] = 1.0 / np.sqrt(inv_d2[ok])
+    s = wl / (2 * d)
+    ok &= s < 1.0
+    t2 = np.full(len(H), np.nan)
+    t2[ok] = 2 * np.degrees(np.arcsin(s[ok]))
+    ok &= (t2 >= tth_min) & (t2 <= tth_max)
+    return [(float(t2[i]), tuple(int(v) for v in H[i]), float(d[i])) for i in np.flatnonzero(ok)]
 
 
 def peak_table(struct, cfg, pattern=None, top=25):
@@ -277,14 +266,17 @@ def peak_table(struct, cfg, pattern=None, top=25):
     if pattern is None:
         pattern = calc_pattern(struct, cfg)
     wl = pattern["wavelength"]
-    refl = _all_reflections(struct, wl, cfg.pxrd_two_theta_min, cfg.pxrd_two_theta_max)
+    refl = struct.memo(("hkl", wl, *_window(cfg)), lambda: _all_reflections(struct, wl, *_window(cfg)))
+    tths = np.array([r[0] for r in refl], float)
     rows = []
     for tth, I in pattern["peaks"][:top]:
         th = math.radians(tth / 2.0)
         d = wl / (2 * math.sin(th)) if th > 0 else float("nan")
-        near = [r for r in refl if abs(r[0] - tth) < 0.10]
+        near = [refl[i] for i in np.flatnonzero(np.abs(tths - tth) < 0.10)]
         if near:
-            h, k, l = min(near, key=lambda r: (sum(abs(x) for x in r[1]), abs(r[0] - tth)))[1]
+            # lowest index sum, then nearest 2theta (to 1e-6 deg, so symmetry-equivalent indices at the
+            # same angle tie exactly instead of on rounding noise), then the first in h-major order
+            h, k, l = min(near, key=lambda r: (sum(abs(x) for x in r[1]), round(abs(r[0] - tth), 6)))[1]
             hkl = f"{h} {k} {l}"
         else:
             hkl = "?"
@@ -307,9 +299,11 @@ def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
     """Stacked calculated PXRD of several phases for phase ID (the cocrystal-vs-starting-materials
     figure), in the house waterfall idiom: **solid palette lines** (vertical position separates
     the traces) with the **right-margin per-trace key** (`spectra.edge_labels`), never labels over
-    the data. `entries` = list of (label, cif_path); each pattern is computed at the house pxrd
-    conventions and normalized to 100. `experimental` = (2theta, I) is drawn (grey) at the base.
-    Returns (fig, ax, patterns) — patterns is a list of (label, pattern dict)."""
+    the data. `entries` = list of (label, cif_path | loaded Structure) — pass Structures when the
+    same phases go into several figures, so their patterns are computed once (the cache lives on
+    the structure); each pattern is computed at the house pxrd conventions and normalized to 100.
+    `experimental` = (2theta, I) is drawn (grey) at the base. Returns (fig, ax, patterns) —
+    patterns is a list of (label, pattern dict)."""
     pcfg = replace(cfg, domain="pxrd")
     style.apply_style(pcfg)
     fig, ax = style.figure(pcfg)
@@ -320,9 +314,10 @@ def plot_overlay_patterns(entries, cfg, experimental=None, offset=None):
         if ey.size and ey.max() > 0:
             ey = ey / ey.max() * 100.0
         traces.append(("experimental", ex, ey, "0.3"))
-    for i, (label, path) in enumerate(entries):
-        ecfg = replace(pcfg, cif_path=path)
-        s = crystal_engine.load(ecfg)
+    for i, (label, src) in enumerate(entries):
+        loaded = isinstance(src, crystal_engine.Structure)
+        ecfg = replace(pcfg, cif_path=src.path if loaded else src)
+        s = src if loaded else crystal_engine.load(ecfg)
         pat = calc_pattern(s, ecfg)
         patterns.append((label, pat))
         traces.append((label, np.asarray(pat["two_theta"], float),
