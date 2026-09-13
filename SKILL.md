@@ -13,6 +13,11 @@ description: >-
   LOQ, residuals, recovery, publication figure, journal figure; crystal structure,
   CIF, .cif, space group, hydrogen bond, displacement ellipsoid / ORTEP, packing
   diagram, calculated PXRD from a CIF, structure validation table.
+license: MIT
+metadata:
+  version: "1.0"
+  skill-author: Uri Baum
+  homepage: https://github.com/TheDop/analytical-figures-skill
 ---
 
 # analytical-figures
