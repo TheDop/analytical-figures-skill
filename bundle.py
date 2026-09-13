@@ -17,6 +17,7 @@ flat namespace. The analysis body is appended last (with any sys.path shim
 removed).
 """
 import os
+import sys
 import re
 import argparse
 
@@ -25,6 +26,12 @@ SKILL = ["config", "style", "verify", "spectra", "calibration", "chemometrics",
          "pxrd_realism", "cocrystal"]
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = os.path.join(HERE, "scripts")
+# The dir holding the `scripts` package must come FIRST on sys.path before anything imports it:
+# run from inside scripts/ (a skills-collection layout) the interpreter's own sys.path[0] is
+# scripts/ itself, and a stray namespace `scripts` elsewhere would win and be cached in
+# sys.modules, silently defeating every later import (critic, SKILL_VERSION).
+if os.path.dirname(SCRIPTS) not in sys.path:
+    sys.path.insert(0, os.path.dirname(SCRIPTS))
 
 # matches a top-level import that pulls in one of THIS skill's own modules
 _SKILL_IMPORT = re.compile(
